@@ -155,7 +155,7 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "gltf",
- "nalgebra-glm",
+ "nalgebra",
  "sdl2",
  "shaderc",
 ]
@@ -243,6 +243,7 @@ checksum = "d68d47bba83f9e2006d117a9a33af1524e655516b8919caac694427a6fb1e511"
 dependencies = [
  "approx",
  "matrixmultiply",
+ "nalgebra-macros",
  "num-complex",
  "num-rational",
  "num-traits",
@@ -251,15 +252,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nalgebra-glm"
-version = "0.18.0"
+name = "nalgebra-macros"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e68879ff227a94627e63bbd518b4f82b8f0cc56bb01a498251507de6d1c412d6"
+checksum = "d232c68884c0c99810a5a4d333ef7e47689cfd0edc85efc9e54e1e6bf5212766"
 dependencies = [
- "approx",
- "nalgebra",
- "num-traits",
- "simba",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]

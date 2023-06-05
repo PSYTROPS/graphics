@@ -23,12 +23,12 @@ pub struct Base {
     //Layout
     //sampler: vk::Sampler,
     //descriptor_pool: vk::DescriptorPool,
-    //descriptor_set_layout: vk::DescriptorSetLayout,
+    pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub pipeline_layout: vk::PipelineLayout
 }
 
 impl Base {
-    pub fn new(window: &sdl2::video::Window) -> Result<Base, vk::Result> {
+    pub fn new(window: &sdl2::video::Window) -> Result<Self, vk::Result> {
         //TODO: Vulkan portability subset support (needed for MoltenVK)
         //TODO: Debug utils messenger support
         unsafe {
@@ -86,10 +86,13 @@ impl Base {
                 khr::Swapchain::name().as_ptr(),
                 vk::KhrShaderDrawParametersFn::name().as_ptr()
             ];
+            let features = vk::PhysicalDeviceFeatures::builder()
+                .multi_draw_indirect(true);
             let mut synchronization2 = vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
             let create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&extensions)
+                .enabled_features(&features)
                 .push_next(&mut synchronization2);
             let device = instance.create_device(physical_device, &create_info, None)?;
             //Queue
@@ -122,10 +125,27 @@ impl Base {
                 vk::PipelineCacheCreateInfo::builder()
             };
             let pipeline_cache = device.create_pipeline_cache(&create_info, None)?;
+            //Descriptor set layout
+            let bindings = [
+                *vk::DescriptorSetLayoutBinding::builder()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::VERTEX)
+            ];
+            let create_info = vk::DescriptorSetLayoutCreateInfo::builder()
+                .bindings(&bindings);
+            let descriptor_set_layout = device.create_descriptor_set_layout(&create_info, None)?;
             //Pipeline layout
-            let create_info = vk::PipelineLayoutCreateInfo::default();
+            let push_constant = vk::PushConstantRange::builder()
+                .stage_flags(vk::ShaderStageFlags::VERTEX)
+                .offset(0)
+                .size(2 * 16 * 4);
+            let create_info = vk::PipelineLayoutCreateInfo::builder()
+                .set_layouts(std::slice::from_ref(&descriptor_set_layout))
+                .push_constant_ranges(std::slice::from_ref(&push_constant));
             let pipeline_layout = device.create_pipeline_layout(&create_info, None)?;
-            Ok(Base {
+            Ok(Self {
                 entry,
                 instance,
                 surface,
@@ -140,7 +160,7 @@ impl Base {
                 pipeline_cache,
                 //sampler,
                 //descriptor_pool,
-                //descriptor_set_layout,
+                descriptor_set_layout,
                 pipeline_layout
             })
         }
@@ -156,7 +176,9 @@ impl Base {
             let mut pipeline_cache_file = File::create(pipeline_cache_path).unwrap();
             pipeline_cache_file.write_all(&pipeline_cache_data).unwrap();
             //Destroy Vulkan objects
+            self.device.device_wait_idle().unwrap();
             self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_fence(self.transfer_fence, None);
             self.device.free_command_buffers(self.command_pool, &[self.transfer_command_buffer]);

@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 ash = {version = "0.37", features = ["linked"]}
 gltf = "1.1"
-nalgebra-glm = "0.18"
+nalgebra = "0.32"
 sdl2 = "0.35"
 
 [build-dependencies]

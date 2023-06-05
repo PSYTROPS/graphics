@@ -12,7 +12,7 @@ pub struct Swapchain {
 
 impl Swapchain {
     pub fn new(base: &Base, old_swapchain: Option<vk::SwapchainKHR>)
-        -> Result<Swapchain, vk::Result> {
+        -> Result<Self, vk::Result> {
         let surface_capabilities = unsafe {base.surface_loader.get_physical_device_surface_capabilities(
             base.physical_device,
             base.surface
@@ -40,7 +40,7 @@ impl Swapchain {
         unsafe {
             let swapchain = loader.create_swapchain(&create_info, None)?;
             let images = loader.get_swapchain_images(swapchain)?;
-            Ok(Swapchain {extent, loader, swapchain, images})
+            Ok(Self {extent, loader, swapchain, images})
         }
     }
 

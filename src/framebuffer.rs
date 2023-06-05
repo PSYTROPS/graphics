@@ -6,6 +6,7 @@ pub struct Framebuffer {
     pub extent: vk::Extent2D,
     pub render_pass: vk::RenderPass,
     pub pipeline: vk::Pipeline,
+    pub descriptor_pool: vk::DescriptorPool,
     //Frame data
     pub image_allocation: vk::DeviceMemory,
     pub frames: Vec<Frame>
@@ -23,7 +24,8 @@ pub struct Frame {
     pub image_views: [vk::ImageView; 3],
     pub framebuffer: vk::Framebuffer,
     pub command_buffer: vk::CommandBuffer,
-    //descriptor_set: vk::DescriptorSet,
+    pub descriptor_set: vk::DescriptorSet,
+    //Synchronization
     /*
         Semaphores:
         1. Swapchain image acquired
@@ -57,7 +59,7 @@ impl Frame {
 
 impl Framebuffer {
     pub fn new(base: &Base, width: u32, height: u32, frame_count: u32)
-        -> Result<Framebuffer, vk::Result> {
+        -> Result<Self, vk::Result> {
         let extent = vk::Extent2D {width, height};
         //Render pass
         let color_format = vk::Format::B8G8R8A8_SRGB;
@@ -177,7 +179,8 @@ impl Framebuffer {
         //Rasterization
         let rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
+            .cull_mode(vk::CullModeFlags::BACK)
+            //.cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
         //Multisampling
@@ -233,6 +236,23 @@ impl Framebuffer {
             base.device.destroy_shader_module(fragment_shader, None);
         }
         // ---------------- Frames ----------------
+        //Descriptor pool
+        let pool_sizes = [
+            *vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(frame_count)
+        ];
+        let create_info = vk::DescriptorPoolCreateInfo::builder()
+            .max_sets(frame_count)
+            .pool_sizes(&pool_sizes);
+        let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
+        //Descriptor sets
+        let layouts: Vec<vk::DescriptorSetLayout> =
+            (0..frame_count).map(|_| base.descriptor_set_layout).collect();
+        let allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&layouts);
+        let descriptor_sets = unsafe {base.device.allocate_descriptor_sets(&allocate_info)}?;
         //Frame images
         let extent_3d = vk::Extent3D::builder()
             .width(extent.width)
@@ -361,11 +381,19 @@ impl Framebuffer {
                 image_views,
                 framebuffer,
                 command_buffer,
+                descriptor_set: descriptor_sets[i as usize],
                 semaphores,
                 fence
             });
         }
-        Ok(Framebuffer {extent, render_pass, pipeline, image_allocation, frames})
+        Ok(Self {
+            extent,
+            render_pass,
+            pipeline,
+            descriptor_pool,
+            image_allocation,
+            frames
+        })
     }
 
     pub fn destroy(&self, base: &Base) {
@@ -373,6 +401,7 @@ impl Framebuffer {
             frame.destroy(base);
         }
         unsafe {
+            base.device.destroy_descriptor_pool(self.descriptor_pool, None);
             base.device.free_memory(self.image_allocation, None);
             base.device.destroy_pipeline(self.pipeline, None);
             base.device.destroy_render_pass(self.render_pass, None);

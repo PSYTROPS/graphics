@@ -4,11 +4,14 @@ use std::path::Path;
 use std::string::String;
 
 fn main() {
-    //print!("cargo:rerun-if-changed=shaders/");
+    //println!("cargo:rerun-if-changed=shaders/*");
     //Compile shaders to SPIR-V
-    let shader_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("shaders/");
-    let output_dir = Path::new(&std::env::var("OUT_DIR").unwrap()).join("shaders/");
-    print!("Output dir: {}", output_dir.display());
+    let shader_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("shaders");
+    let output_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("target")
+        .join(&std::env::var("PROFILE").unwrap())
+        .join("shaders");
     if !output_dir.exists() {
         std::fs::create_dir(output_dir.clone()).unwrap();
     }

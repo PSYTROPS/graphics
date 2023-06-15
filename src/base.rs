@@ -4,6 +4,10 @@ use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 
+//Remember to match these values in the fragment shader
+pub const MAX_TEXTURES: u32 = 64;
+pub const MAX_LIGHTS: u32 = 64;
+
 ///Container for persistent Vulkan objects (created once and never reassigned).
 ///Used to create transient Vulkan objects.
 pub struct Base {
@@ -21,8 +25,7 @@ pub struct Base {
     pub transfer_fence: vk::Fence,
     pub pipeline_cache: vk::PipelineCache,
     //Layout
-    //sampler: vk::Sampler,
-    //descriptor_pool: vk::DescriptorPool,
+    pub sampler: vk::Sampler,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub pipeline_layout: vk::PipelineLayout
 }
@@ -88,12 +91,18 @@ impl Base {
             ];
             let features = vk::PhysicalDeviceFeatures::builder()
                 .multi_draw_indirect(true);
-            let mut synchronization2 = vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
+            let mut synchronization2 = vk::PhysicalDeviceSynchronization2Features::builder()
+                .synchronization2(true);
+            let mut vk12_features = vk::PhysicalDeviceVulkan12Features::builder()
+                .descriptor_indexing(true)
+                .shader_sampled_image_array_non_uniform_indexing(true)
+                .shader_storage_buffer_array_non_uniform_indexing(true);
             let create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&extensions)
                 .enabled_features(&features)
-                .push_next(&mut synchronization2);
+                .push_next(&mut synchronization2)
+                .push_next(&mut vk12_features);
             let device = instance.create_device(physical_device, &create_info, None)?;
             //Queue
             let graphics_queue = device.get_device_queue(graphics_queue_family, 0);
@@ -125,20 +134,56 @@ impl Base {
                 vk::PipelineCacheCreateInfo::builder()
             };
             let pipeline_cache = device.create_pipeline_cache(&create_info, None)?;
+            //Sampler
+            let create_info = vk::SamplerCreateInfo::builder()
+                .mag_filter(vk::Filter::NEAREST)
+                .min_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(false);
+            let sampler = device.create_sampler(&create_info, None)?;
             //Descriptor set layout
             let bindings = [
+                //Transforms
                 *vk::DescriptorSetLayoutBinding::builder()
                     .binding(0)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::VERTEX)
+                    .stage_flags(vk::ShaderStageFlags::VERTEX),
+                //Materials
+                *vk::DescriptorSetLayoutBinding::builder()
+                    .binding(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                //Sampler
+                *vk::DescriptorSetLayoutBinding::builder()
+                    .binding(2)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                    .immutable_samplers(std::slice::from_ref(&sampler)),
+                //Textures
+                *vk::DescriptorSetLayoutBinding::builder()
+                    .binding(3)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(MAX_TEXTURES)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                //Lights
+                *vk::DescriptorSetLayoutBinding::builder()
+                    .binding(4)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             ];
             let create_info = vk::DescriptorSetLayoutCreateInfo::builder()
                 .bindings(&bindings);
             let descriptor_set_layout = device.create_descriptor_set_layout(&create_info, None)?;
             //Pipeline layout
             let push_constant = vk::PushConstantRange::builder()
-                .stage_flags(vk::ShaderStageFlags::VERTEX)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
                 .offset(0)
                 .size(2 * 16 * 4);
             let create_info = vk::PipelineLayoutCreateInfo::builder()
@@ -158,8 +203,7 @@ impl Base {
                 transfer_command_buffer,
                 transfer_fence,
                 pipeline_cache,
-                //sampler,
-                //descriptor_pool,
+                sampler,
                 descriptor_set_layout,
                 pipeline_layout
             })
@@ -178,6 +222,7 @@ impl Base {
             //Destroy Vulkan objects
             self.device.device_wait_idle().unwrap();
             self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device.destroy_sampler(self.sampler, None);
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_fence(self.transfer_fence, None);
@@ -263,6 +308,7 @@ impl Base {
         }
     }
 
+    ///Creates images bound to a shared memory allocation.
     pub fn create_images(
         &self,
         create_infos: &[vk::ImageCreateInfo],
@@ -280,9 +326,11 @@ impl Base {
             ).collect();
             let (allocation, offsets) = self.allocate(&requirements, properties)?;
             //Bind images to memory
-            let bind_infos: Vec<_> = images.iter().zip(offsets).map(
-                |(image , offset)| vk::BindImageMemoryInfo::builder()
-                    .image(*image).memory(allocation).memory_offset(offset).build()
+            let bind_infos: Vec<_> = std::iter::zip(&images, &offsets).map(
+                |(image , offset)| *vk::BindImageMemoryInfo::builder()
+                    .image(*image)
+                    .memory(allocation)
+                    .memory_offset(*offset)
             ).collect();
             self.device.bind_image_memory2(&bind_infos)?;
             Ok((images, allocation))
@@ -339,7 +387,7 @@ impl Base {
             self.device.wait_for_fences(
                 std::slice::from_ref(&self.transfer_fence),
                 false,
-                1_000_000_000, // 1 second
+                1_000_000_000, //1 second
             )?;
             self.device.reset_fences(std::slice::from_ref(&self.transfer_fence))?;
             self.device.destroy_buffer(staging, None);

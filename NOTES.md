@@ -11,6 +11,9 @@
     Vulkan object lifetimes do not map well to Rust lifetimes.
 * Sometimes a function takes a slice of items as a parameter, but you only have one item.
     Use `std::slice::from_ref(&item)` instead of `&[item]` to avoid an unnecessary copy.
+* IMPORTANT: Ash builder objects which take a slice of items
+    _will segfault_ when given a vector that goes out of scope
+    before the builder object is consumed.
 * Don't bother about error handling for now.
     It sounds nice to have proper error handling
     but the sheer volume of handling needed to cover every single Vulkan call
@@ -24,3 +27,4 @@
     like addition & multiplication.
 * The Vulkan coordinate system differs from OpenGL,
     so be careful when using graphics library routines.
+    See `scene.rs` for details on our coordinate system.

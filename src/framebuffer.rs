@@ -62,9 +62,9 @@ impl Framebuffer {
         -> Result<Self, vk::Result> {
         let extent = vk::Extent2D {width, height};
         //Render pass
-        let color_format = vk::Format::B8G8R8A8_SRGB;
-        let depth_format = vk::Format::D32_SFLOAT;
-        let samples = vk::SampleCountFlags::TYPE_4;
+        let color_format: vk::Format = vk::Format::B8G8R8A8_SRGB;
+        let depth_format: vk::Format = vk::Format::D32_SFLOAT;
+        let samples: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_4;
         let attachments = [
             //Color attachment
             *vk::AttachmentDescription::builder()
@@ -124,8 +124,8 @@ impl Framebuffer {
         let mut shader_dir = std::env::current_exe().unwrap();
         shader_dir.pop();
         shader_dir.push("shaders/");
-        let vertex_shader = base.create_shader_module(shader_dir.join("test.vert.spv"))?;
-        let fragment_shader = base.create_shader_module(shader_dir.join("test.frag.spv"))?;
+        let vertex_shader = base.create_shader_module(shader_dir.join("pbr.vert.spv"))?;
+        let fragment_shader = base.create_shader_module(shader_dir.join("pbr.frag.spv"))?;
         let shader_stages = [
             *vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -151,12 +151,24 @@ impl Framebuffer {
                 .binding(0)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .offset(0),
-            //Color
+            //Normal
             *vk::VertexInputAttributeDescription::builder()
                 .location(1)
                 .binding(0)
                 .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(12)
+                .offset(12),
+            //Texture coordinates
+            *vk::VertexInputAttributeDescription::builder()
+                .location(2)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(24),
+            //Material index
+            *vk::VertexInputAttributeDescription::builder()
+                .location(3)
+                .binding(0)
+                .format(vk::Format::R32_UINT)
+                .offset(32)
         ];
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_binding_descriptions(&vertex_bindings)
@@ -180,7 +192,6 @@ impl Framebuffer {
         let rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(vk::CullModeFlags::BACK)
-            //.cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
         //Multisampling
@@ -235,12 +246,17 @@ impl Framebuffer {
             base.device.destroy_shader_module(vertex_shader, None);
             base.device.destroy_shader_module(fragment_shader, None);
         }
-        // ---------------- Frames ----------------
         //Descriptor pool
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(frame_count)
+                .descriptor_count(3 * frame_count),
+            *vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::SAMPLER)
+                .descriptor_count(frame_count),
+            *vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(frame_count * super::base::MAX_TEXTURES)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(frame_count)

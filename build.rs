@@ -3,9 +3,8 @@ use std::io::Read;
 use std::path::Path;
 use std::string::String;
 
-fn main() {
-    //println!("cargo:rerun-if-changed=shaders/*");
-    //Compile shaders to SPIR-V
+//Compile shader source code to SPIR-V
+fn compile_shaders() {
     let shader_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("shaders");
     let output_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
@@ -51,4 +50,40 @@ fn main() {
             }
         }
     }
+}
+
+//Create symlink to assets directory
+#[cfg(unix)]
+fn copy_assets() -> std::io::Result<()> {
+    let original = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("assets");
+    let link = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("target")
+        .join(&std::env::var("PROFILE").unwrap())
+        .join("assets");
+    if !link.exists() {
+        std::os::unix::fs::symlink(original, link)?;
+    }
+    Ok(())
+}
+
+//Create symlink to assets directory
+#[cfg(windows)]
+fn copy_assets() -> std::io::Result<()> {
+    let original = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("assets");
+    let link = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("target")
+        .join(&std::env::var("PROFILE").unwrap())
+        .join("assets");
+    if !link.exists() {
+        std::os::windows::fs::symlink_dir(original, link)?;
+    }
+    Ok(())
+}
+
+fn main() {
+    //println!("cargo:rerun-if-changed=shaders/*");
+    compile_shaders();
+    copy_assets().unwrap();
 }

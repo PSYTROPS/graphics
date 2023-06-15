@@ -2,7 +2,7 @@ use nalgebra as na;
 
 /*
     Coordinate systems:
-    * Worldspace: Right-handed with Z-axis up
+    * Worldspace: Right-handed with Y-axis up
     * Viewspace: Right-handed with Y-axis down, looking into +Z axis
     * Clipspace: Defined by Vulkan.
         X & Y axes have range [-1, 1] where (-1, -1) is the upper-left corner of the screen.
@@ -25,12 +25,12 @@ impl Camera {
     pub fn new() -> Camera {
         Camera {
             pos: na::Point3::origin(),
-            dir: na::UnitVector3::new_normalize(na::Vector3::y()),
-            up: na::UnitVector3::new_normalize(na::Vector3::z()),
+            dir: -na::Vector3::z_axis(),
+            up: na::Vector3::y_axis(),
             fov: na::RealField::frac_pi_4(),
             aspect: 1.0,
-            near: 1.0,
-            far: 128.0
+            near: 0.5,
+            far: 64.0
         }
     }
 
@@ -41,9 +41,11 @@ impl Camera {
         self.pos += vertical * self.up.into_inner();
     }
 
-    pub fn rotate(&mut self, roll: f32, pitch: f32, yaw: f32) {
-        let rotation = na::geometry::Rotation3::from_euler_angles(roll, pitch, yaw);
-        self.dir = rotation * self.dir;
+    pub fn rotate(&mut self, pitch: f32, yaw: f32) {
+        let right = na::UnitVector3::new_normalize(self.dir.cross(&self.up));
+        let pitch_rot = na::Rotation3::<f32>::from_axis_angle(&right, pitch);
+        let yaw_rot = na::Rotation3::<f32>::from_axis_angle(&self.up, yaw);
+        self.dir = pitch_rot * yaw_rot * self.dir;
     }
 
     ///Transforms world-space coordinates to camera space

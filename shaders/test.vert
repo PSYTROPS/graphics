@@ -1,13 +1,16 @@
 #version 460
 
-//Vertex input
+//Input
 layout(location=0) in vec3 in_pos;
-layout(location=1) in vec3 in_color;
-//layout(location=2) in vec2 in_tex;
-//layout(location=3) in uint in_material;
+layout(location=1) in vec3 in_normal;
+layout(location=2) in vec2 in_texcoords;
+layout(location=3) in uint in_material;
 
-//Vertex output
-layout(location=0) out vec4 out_color;
+//Output
+layout(location=0) out vec3 out_pos;
+layout(location=1) out vec3 out_normal;
+layout(location=2) out vec2 out_texcoords;
+layout(location=3) out uint out_material;
 
 //Push constants
 layout(push_constant) uniform constants {
@@ -15,14 +18,17 @@ layout(push_constant) uniform constants {
 	mat4 projection;
 };
 
-//Storage buffer
+//Descriptors
 layout(set=0, binding=0) restrict readonly buffer storage {
 	mat4 transformations[];
 };
 
 void main() {
 	const vec4 pos = vec4(in_pos, 1.0); //Model-space position
-	const vec4 color = vec4(in_color, 1.0);
-	gl_Position = projection * view * transformations[gl_DrawID] * pos;
-	out_color = color;
+	const mat4 t = transformations[gl_DrawID];
+	gl_Position = projection * view * t * pos;
+	out_pos = (view * t * pos).xyz;
+	out_normal = (view * t * vec4(in_normal, 1.0)).xyz;
+	out_texcoords = in_texcoords;
+	out_material = in_material;
 }

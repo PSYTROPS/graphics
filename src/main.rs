@@ -20,13 +20,15 @@ struct Inputs {
 fn main() {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
-    let window = video.window("Graphics", 512, 512).vulkan().resizable().build().unwrap();
+    let window = video.window("Graphics", 2048, 2048).vulkan().resizable().build().unwrap();
     let mut renderer = Renderer::new(&window).expect("Renderer creation error");
-    renderer.camera.pos[1] = -32.0;
+    renderer.camera.pos[2] = 1.0;
     //Load scene
     let mut path = std::env::current_exe().unwrap();
     path.pop();
-    path.push("lantern.glb");
+    path.push("assets");
+    path.push("bottle.glb");
+    //path.push("mrspheres.glb");
     let scene = Scene::load_gltf(path).unwrap();
     renderer.load_scene(&scene).unwrap();
     //Event loop
@@ -94,20 +96,21 @@ fn main() {
         //Movement
         //Translation
         let mut direction = [0.0; 3];
-        if inputs.forward {direction[0] += 1.0 * delta.as_secs_f32();}
-        if inputs.backward {direction[0] -= 1.0 * delta.as_secs_f32();}
-        if inputs.left {direction[1] -= 1.0 * delta.as_secs_f32();}
-        if inputs.right {direction[1] += 1.0 * delta.as_secs_f32();}
-        if inputs.up {direction[2] += 1.0 * delta.as_secs_f32();}
-        if inputs.down {direction[2] -= 1.0 * delta.as_secs_f32();}
+        let speed = 1.0;
+        if inputs.forward {direction[0] += speed * delta.as_secs_f32();}
+        if inputs.backward {direction[0] -= speed * delta.as_secs_f32();}
+        if inputs.left {direction[1] -= speed * delta.as_secs_f32();}
+        if inputs.right {direction[1] += speed * delta.as_secs_f32();}
+        if inputs.up {direction[2] += speed * delta.as_secs_f32();}
+        if inputs.down {direction[2] -= speed * delta.as_secs_f32();}
         renderer.camera.locomote(direction[0], direction[1], direction[2]);
         //Rotation
-        let mut rotation = [0.0; 3];
+        let mut rotation = [0.0; 2];
         if inputs.pitch_up {rotation[0] += 1.0 * delta.as_secs_f32();}
         if inputs.pitch_down {rotation[0] -= 1.0 * delta.as_secs_f32();}
         if inputs.yaw_left {rotation[1] += 1.0 * delta.as_secs_f32();}
         if inputs.yaw_right {rotation[1] -= 1.0 * delta.as_secs_f32();}
-        renderer.camera.rotate(rotation[0], rotation[2], rotation[1]);
+        renderer.camera.rotate(rotation[0], rotation[1]);
         //Draw
         renderer.draw().unwrap();
     }

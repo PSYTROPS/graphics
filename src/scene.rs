@@ -255,7 +255,9 @@ impl Scene {
             }
         }).collect());
         //Textures
-        let default_texture = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+        let default_texture = image::RgbaImage::from_pixel(
+            1, 1, image::Rgba([255, 255, 255, 255])
+        );
         let mut textures = vec![default_texture];
         textures.append(&mut document.textures().map(|texture| {
             /*
@@ -280,21 +282,8 @@ impl Scene {
             }
         }).collect());
         //Lights
-        //TODO: Load from file
-        let lights = vec![
-            PointLight {
-                pos: [2.0, 2.0, 0.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                intensity: 8.0,
-                range: 64.0
-            },
-            PointLight {
-                pos: [0.0, 0.0, 0.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                intensity: 0.0,
-                range: 8.0
-            }
-        ];
+        //TODO: KHR_lights_punctual support
+        let lights: Vec<PointLight> = vec![];
         Ok(Self {nodes, meshes, materials, textures, lights})
     }
 }

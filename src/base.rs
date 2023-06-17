@@ -6,7 +6,7 @@ use std::io::Write;
 
 //Remember to match these values in the fragment shader
 pub const MAX_TEXTURES: u32 = 64;
-pub const MAX_LIGHTS: u32 = 64;
+//pub const MAX_LIGHTS: u32 = 64;
 
 ///Container for persistent Vulkan objects (created once and never reassigned).
 ///Used to create transient Vulkan objects.
@@ -71,7 +71,7 @@ impl Base {
             let Some((physical_device, graphics_queue_family)) = physical_devices.iter().find_map(|phys_dev| {
                 let properties = instance.get_physical_device_queue_family_properties(*phys_dev);
                 //Find queue family with graphics & presentation support
-                //(In practice, the graphics & present queue families are never different)
+                //(In practice, the graphics & present queue families are always the same)
                 if let Some((family, _)) = properties.iter().enumerate().find(
                     |(i, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
                         && surface_loader.get_physical_device_surface_support(*phys_dev, *i as u32, surface).unwrap_or_default()

@@ -27,9 +27,10 @@ impl DeviceScene {
     pub fn new(base: &Base, scene: &Scene, frame_count: usize) -> Result<Self, vk::Result> {
         //Concatenate meshes
         let mut vertices = Vec::<Vertex>::new();
-        let mut indices = Vec::<u16>::new(); let mut draw_commands = Vec::<vk::DrawIndexedIndirectCommand>::new();
+        let mut indices = Vec::<u16>::new();
+        let mut mesh_commands = Vec::<vk::DrawIndexedIndirectCommand>::new();
         for mesh in &scene.meshes {
-            draw_commands.push(*vk::DrawIndexedIndirectCommand::builder()
+            mesh_commands.push(*vk::DrawIndexedIndirectCommand::builder()
                 .index_count(mesh.indices.len() as u32)
                 .instance_count(1)
                 .first_index(indices.len() as u32)
@@ -39,11 +40,21 @@ impl DeviceScene {
             vertices.extend_from_slice(&mesh.vertices);
             indices.extend_from_slice(&mesh.indices);
         }
-        //Node transformations
-        let transforms: Vec::<na::Matrix4<f32>> = scene.nodes.iter().map(
-            |node| node.matrix().to_homogeneous()
+        //Draw commands
+        let draw_commands: Vec<_> = scene.nodes.iter().filter_map(
+            |node| if let Some(mesh) = node.mesh {
+                Some(mesh_commands[mesh as usize])
+            } else {None}
         ).collect();
-        let transforms_size = transforms.len() * std::mem::size_of::<na::Matrix4<f32>>();
+        //Node transformations
+        let transform_matrices: Vec<_> = std::iter::zip(
+            &scene.nodes,
+            scene.transformations().iter().map(|t| t.to_homogeneous())
+        ).filter_map(
+            |(n, t)| if let Some(_) = n.mesh {Some(t)} else {None}
+        ).collect();
+        let transforms_size = transform_matrices.len() * std::mem::size_of::<na::Matrix4<f32>>();
+        assert!(draw_commands.len() == transform_matrices.len());
         //Create device-local buffers
         let create_infos = [
             //Vertex buffer
@@ -101,9 +112,9 @@ impl DeviceScene {
         unsafe {
             let data = base.device.map_memory(host_allocation, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
             for i in 0..frame_count {
-                transforms.as_ptr().copy_to_nonoverlapping(
+                transform_matrices.as_ptr().copy_to_nonoverlapping(
                     data.add(i * transforms_size) as *mut na::Matrix4<f32>,
-                    transforms.len()
+                    transform_matrices.len()
                 );
             }
             let memory_range = vk::MappedMemoryRange::builder()
@@ -113,17 +124,12 @@ impl DeviceScene {
             base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
             base.device.unmap_memory(host_allocation);
         }
-        let mut assets = scene.textures.clone();
-        //TODO: Remove image duplication by repeating descriptor binding?
-        assets.append(&mut std::iter::repeat(scene.textures[0].clone())
-            .take(super::base::MAX_TEXTURES as usize - scene.textures.len()).collect()
-        );
-        let textures = Textures::new(base, &assets)?;
+        let textures = Textures::new(base, &scene.textures)?;
         //Result
         Ok(Self {
             allocation,
             mesh_count: scene.meshes.len() as u32,
-            transform_matrices: transforms,
+            transform_matrices,
             transforms_size,
             vertices: buffers[0],
             indices: buffers[1],

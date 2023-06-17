@@ -1,6 +1,5 @@
 use graphics::Renderer;
 use graphics::scene::Scene;
-//use nalgebra as na;
 
 struct Inputs {
     //Translation
@@ -20,7 +19,7 @@ struct Inputs {
 fn main() {
     let sdl = sdl2::init().unwrap();
     let video = sdl.video().unwrap();
-    let window = video.window("Graphics", 2048, 2048).vulkan().resizable().build().unwrap();
+    let window = video.window("Graphics", 1024, 1024).vulkan().resizable().build().unwrap();
     let mut renderer = Renderer::new(&window).expect("Renderer creation error");
     renderer.camera.pos[2] = 1.0;
     //Load scene
@@ -29,7 +28,15 @@ fn main() {
     path.push("assets");
     path.push("bottle.glb");
     //path.push("mrspheres.glb");
-    let scene = Scene::load_gltf(path).unwrap();
+    let mut scene = Scene::load_gltf(path).unwrap();
+    scene.lights = vec![
+        graphics::scene::PointLight {
+            pos: [2.0, 2.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            intensity: 16.0,
+            range: 64.0
+        },
+    ];
     renderer.load_scene(&scene).unwrap();
     //Event loop
     let mut event_pump = sdl.event_pump().unwrap();

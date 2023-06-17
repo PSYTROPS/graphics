@@ -78,7 +78,7 @@ void main() {
 	const vec3 v = -vec3(in_pos);
 	const vec3 n = in_normal;
 	vec3 outgoing = vec3(0.002) * vec3(albedo);
-	for (uint i = 0; i < 2; ++i) {
+	for (uint i = 0; i < 64; ++i) {
 		//Light
 		const PointLight light = point_lights[i];
 		const vec3 light_pos = vec3(view * light.pos);

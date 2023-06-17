@@ -27,7 +27,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(window: &sdl2::video::Window) -> Result<Self, vk::Result> {
         let base = Base::new(window)?;
-        let framebuffer = Framebuffer::new(&base, 512, 512, 2)?;
+        let framebuffer = Framebuffer::new(&base, 1024, 1024, 2)?;
         let swapchain = Swapchain::new(&base, None)?;
         //Scene data
         let camera = Camera::new();
@@ -46,11 +46,14 @@ impl Renderer {
         self.scene = DeviceScene::new(&self.base, &scene, self.framebuffer.frames.len())?;
         //Update descriptor sets
         let mut writes = Vec::<vk::WriteDescriptorSet>::new();
-        let image_infos: Vec<_> = self.scene.textures.image_views.iter().map(
+        let mut image_infos: Vec<_> = self.scene.textures.image_views.iter().map(
             |image_view| *vk::DescriptorImageInfo::builder()
                 .image_view(*image_view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         ).collect();
+        image_infos.extend(std::iter::repeat(image_infos[0].clone())
+            .take(base::MAX_TEXTURES as usize - image_infos.len())
+        );
         for (i, frame) in self.framebuffer.frames.iter().enumerate() {
             //Transforms
             let buffer_info = vk::DescriptorBufferInfo::builder()

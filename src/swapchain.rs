@@ -2,7 +2,6 @@ use ash::vk;
 use ash::extensions::khr;
 use crate::base::Base;
 
-///Swapchain-related objects
 pub struct Swapchain {
     pub extent: vk::Extent2D,
     pub loader: khr::Swapchain,
@@ -13,10 +12,12 @@ pub struct Swapchain {
 impl Swapchain {
     pub fn new(base: &Base, old_swapchain: Option<vk::SwapchainKHR>)
         -> Result<Self, vk::Result> {
-        let surface_capabilities = unsafe {base.surface_loader.get_physical_device_surface_capabilities(
-            base.physical_device,
-            base.surface
-        )}?;
+        let surface_capabilities = unsafe {
+            base.surface_loader.get_physical_device_surface_capabilities(
+                base.physical_device,
+                base.surface
+            )
+        }?;
         let extent = if surface_capabilities.current_extent.width == u32::MAX
             || surface_capabilities.current_extent.height == u32::MAX {
             surface_capabilities.max_image_extent
@@ -43,8 +44,10 @@ impl Swapchain {
             Ok(Self {extent, loader, swapchain, images})
         }
     }
+}
 
-    pub fn destroy(&self) {
+impl Drop for Swapchain {
+    fn drop(&mut self) {
         unsafe {
             self.loader.destroy_swapchain(self.swapchain, None);
         }

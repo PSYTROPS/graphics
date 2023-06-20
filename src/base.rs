@@ -210,30 +210,6 @@ impl Base {
         }
     }
 
-    pub fn destroy(&mut self) {
-        unsafe {
-            //Save pipeline cache
-            let pipeline_cache_data = self.device.get_pipeline_cache_data(self.pipeline_cache).unwrap();
-            let mut pipeline_cache_path = std::env::current_exe().unwrap();
-            pipeline_cache_path.pop();
-            pipeline_cache_path.push("pipeline-cache.bin");
-            let mut pipeline_cache_file = File::create(pipeline_cache_path).unwrap();
-            pipeline_cache_file.write_all(&pipeline_cache_data).unwrap();
-            //Destroy Vulkan objects
-            self.device.device_wait_idle().unwrap();
-            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
-            self.device.destroy_sampler(self.sampler, None);
-            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
-            self.device.destroy_fence(self.transfer_fence, None);
-            self.device.free_command_buffers(self.command_pool, &[self.transfer_command_buffer]);
-            self.device.destroy_command_pool(self.command_pool, None);
-            self.device.destroy_device(None);
-            self.surface_loader.destroy_surface(self.surface, None);
-            self.instance.destroy_instance(None);
-        }
-    }
-
     pub fn create_shader_module<P: AsRef<std::path::Path>>(&self, filename: P)
         -> Result<vk::ShaderModule, vk::Result> {
         let mut file = std::fs::File::open(filename).unwrap();
@@ -394,5 +370,31 @@ impl Base {
             self.device.free_memory(allocation, None);
         }
         Ok(())
+    }
+}
+
+impl Drop for Base {
+    fn drop(&mut self) {
+        unsafe {
+            //Save pipeline cache
+            let pipeline_cache_data = self.device.get_pipeline_cache_data(self.pipeline_cache).unwrap();
+            let mut pipeline_cache_path = std::env::current_exe().unwrap();
+            pipeline_cache_path.pop();
+            pipeline_cache_path.push("pipeline-cache.bin");
+            let mut pipeline_cache_file = File::create(pipeline_cache_path).unwrap();
+            pipeline_cache_file.write_all(&pipeline_cache_data).unwrap();
+            //Destroy Vulkan objects
+            self.device.device_wait_idle().unwrap();
+            self.device.destroy_pipeline_cache(self.pipeline_cache, None);
+            self.device.destroy_sampler(self.sampler, None);
+            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_fence(self.transfer_fence, None);
+            self.device.free_command_buffers(self.command_pool, &[self.transfer_command_buffer]);
+            self.device.destroy_command_pool(self.command_pool, None);
+            self.device.destroy_device(None);
+            self.surface_loader.destroy_surface(self.surface, None);
+            self.instance.destroy_instance(None);
+        }
     }
 }

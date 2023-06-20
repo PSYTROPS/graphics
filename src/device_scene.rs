@@ -3,9 +3,10 @@ use nalgebra as na;
 use super::base::Base;
 use super::scene::{Vertex, Material, Scene, PointLight};
 use super::textures::Textures;
+use std::rc::Rc;
 
-#[derive(Default)]
 pub struct DeviceScene {
+    base: Rc<Base>,
     pub mesh_count: u32,
     pub transform_matrices: Vec<na::Matrix4<f32>>,
     pub transforms_size: usize,
@@ -24,7 +25,7 @@ pub struct DeviceScene {
 }
 
 impl DeviceScene {
-    pub fn new(base: &Base, scene: &Scene, frame_count: usize) -> Result<Self, vk::Result> {
+    pub fn new(base: Rc<Base>, scene: &Scene, frame_count: usize) -> Result<Self, vk::Result> {
         //Concatenate meshes
         let mut vertices = Vec::<Vertex>::new();
         let mut indices = Vec::<u16>::new();
@@ -124,9 +125,10 @@ impl DeviceScene {
             base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
             base.device.unmap_memory(host_allocation);
         }
-        let textures = Textures::new(base, &scene.textures)?;
+        let textures = Textures::new(base.clone(), &scene.textures)?;
         //Result
         Ok(Self {
+            base,
             allocation,
             mesh_count: scene.meshes.len() as u32,
             transform_matrices,
@@ -142,19 +144,20 @@ impl DeviceScene {
             textures
         })
     }
+}
 
-    pub fn destroy(&self, base: &Base) {
-        self.textures.destroy(base);
+impl Drop for DeviceScene {
+    fn drop(&mut self) {
         unsafe {
-            base.device.destroy_buffer(self.staging, None);
-            base.device.free_memory(self.host_allocation, None);
-            base.device.destroy_buffer(self.draw_commands, None);
-            base.device.destroy_buffer(self.lights, None);
-            base.device.destroy_buffer(self.materials, None);
-            base.device.destroy_buffer(self.transforms, None);
-            base.device.destroy_buffer(self.indices, None);
-            base.device.destroy_buffer(self.vertices, None);
-            base.device.free_memory(self.allocation, None);
+            self.base.device.destroy_buffer(self.staging, None);
+            self.base.device.free_memory(self.host_allocation, None);
+            self.base.device.destroy_buffer(self.draw_commands, None);
+            self.base.device.destroy_buffer(self.lights, None);
+            self.base.device.destroy_buffer(self.materials, None);
+            self.base.device.destroy_buffer(self.transforms, None);
+            self.base.device.destroy_buffer(self.indices, None);
+            self.base.device.destroy_buffer(self.vertices, None);
+            self.base.device.free_memory(self.allocation, None);
         }
     }
 }

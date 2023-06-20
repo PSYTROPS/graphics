@@ -1,15 +1,16 @@
 use ash::vk;
 use super::base::Base;
+use std::rc::Rc;
 
-#[derive(Default)]
 pub struct Textures {
+    base: Rc<Base>,
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
     pub allocation: vk::DeviceMemory
 }
 
 impl Textures {
-    pub fn new(base: &Base, assets: &[image::RgbaImage]) -> Result<Textures, vk::Result> {
+    pub fn new(base: Rc<Base>, assets: &[image::RgbaImage]) -> Result<Textures, vk::Result> {
         //TODO: Reswizzle RgbaImage textures to BGRA format
         //let format = vk::Format::B8G8R8A8_SRGB;
         let format = vk::Format::R8G8B8A8_SRGB;
@@ -181,18 +182,20 @@ impl Textures {
             base.device.destroy_buffer(staging[0], None);
             base.device.free_memory(staging_alloc, None);
         }
-        Ok(Textures {images, image_views, allocation})
+        Ok(Textures {base, images, image_views, allocation})
     }
+}
 
-    pub fn destroy(&self, base: &Base) {
+impl Drop for Textures {
+    fn drop(&mut self) {
         unsafe {
             for image_view in &self.image_views {
-                base.device.destroy_image_view(*image_view, None);
+                self.base.device.destroy_image_view(*image_view, None);
             }
             for image in &self.images {
-                base.device.destroy_image(*image, None);
+                self.base.device.destroy_image(*image, None);
             }
-            base.device.free_memory(self.allocation, None);
+            self.base.device.free_memory(self.allocation, None);
         }
     }
 }

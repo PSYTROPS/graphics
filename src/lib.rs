@@ -1,52 +1,62 @@
+use ash::vk;
+use nalgebra as na;
+
+use base::Base;
+use renderpass::RenderPass;
+use framebuffer::Framebuffer;
+use swapchain::Swapchain;
+use camera::Camera;
+use device_scene::DeviceScene;
+
+use std::rc::Rc;
+
 pub mod scene;
 mod base;
+mod renderpass;
 mod framebuffer;
 mod swapchain;
 mod camera;
 mod device_scene;
 mod textures;
 
-use ash::vk;
-use nalgebra as na;
-use base::Base;
-use framebuffer::Framebuffer;
-use swapchain::Swapchain;
-use camera::Camera;
-use device_scene::DeviceScene;
-
 pub struct Renderer {
-    base: Base,
+    base: Rc<Base>,
+    renderpass: RenderPass,
     framebuffer: Framebuffer,
     swapchain: Swapchain,
     //Scene data
     pub camera: Camera,
-    scene: DeviceScene,
+    scenes: Vec<DeviceScene>,
     current_frame: u32
 }
 
 impl Renderer {
     pub fn new(window: &sdl2::video::Window) -> Result<Self, vk::Result> {
-        let base = Base::new(window)?;
-        let framebuffer = Framebuffer::new(&base, 1024, 1024, 2)?;
+        let base = Rc::new(Base::new(window)?);
+        let extent = vk::Extent2D {
+            width: 1024,
+            height: 1024
+        };
+        let renderpass = RenderPass::new(base.clone(), extent)?;
+        let framebuffer = Framebuffer::new(base.clone(), &renderpass, 2)?;
         let swapchain = Swapchain::new(&base, None)?;
-        //Scene data
         let camera = Camera::new();
-        let scene = DeviceScene::default();
         Ok(Renderer {
             base,
+            renderpass,
             framebuffer,
             swapchain,
             camera,
-            scene,
+            scenes: vec![],
             current_frame: 0
         })
     }
 
     pub fn load_scene(&mut self, scene: &scene::Scene) -> Result<(), vk::Result> {
-        self.scene = DeviceScene::new(&self.base, &scene, self.framebuffer.frames.len())?;
+        let dev_scene = DeviceScene::new(self.base.clone(), &scene, self.framebuffer.frames.len())?;
         //Update descriptor sets
         let mut writes = Vec::<vk::WriteDescriptorSet>::new();
-        let mut image_infos: Vec<_> = self.scene.textures.image_views.iter().map(
+        let mut image_infos: Vec<_> = dev_scene.textures.image_views.iter().map(
             |image_view| *vk::DescriptorImageInfo::builder()
                 .image_view(*image_view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -57,9 +67,9 @@ impl Renderer {
         for (i, frame) in self.framebuffer.frames.iter().enumerate() {
             //Transforms
             let buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(self.scene.transforms)
-                .offset((i * self.scene.transforms_size) as u64)
-                .range(self.scene.transforms_size as u64);
+                .buffer(dev_scene.transforms)
+                .offset((i * dev_scene.transforms_size) as u64)
+                .range(dev_scene.transforms_size as u64);
             writes.push(*vk::WriteDescriptorSet::builder()
                 .dst_set(frame.descriptor_set)
                 .dst_binding(0)
@@ -69,7 +79,7 @@ impl Renderer {
             );
             //Materials
             let buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(self.scene.materials)
+                .buffer(dev_scene.materials)
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             writes.push(*vk::WriteDescriptorSet::builder()
@@ -89,7 +99,7 @@ impl Renderer {
             );
             //Lights
             let buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(self.scene.lights)
+                .buffer(dev_scene.lights)
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             writes.push(*vk::WriteDescriptorSet::builder()
@@ -103,16 +113,31 @@ impl Renderer {
         unsafe {
             self.base.device.update_descriptor_sets(&writes, &[]);
         }
+        self.scenes.push(dev_scene);
         Ok(())
     }
 
+	/*
     pub fn update_scene(&mut self, scene: &scene::Scene) {
-        for (i, node) in scene.nodes.iter().enumerate() {
-            let transform = node.matrix().to_homogeneous();
-            self.scene.transform_matrices[i] = transform;
+        if let Some(dev_scene) = &mut self.scene {
+            for (i, node) in scene.nodes.iter().enumerate() {
+                let transform = node.matrix().to_homogeneous();
+                dev_scene.transform_matrices[i] = transform;
+            }
         }
     }
+    */
 
+    /**
+        Draw bound scenes.
+        The instructions proceed as follows:
+        1. Acquire swapchain image
+        2. Record graphics command buffer
+            1. Write push constants
+            2. Update scene data
+            3. Draw scenes
+            4. Blit drawn image to swapchain image
+    */
     pub fn draw(&mut self) -> Result<(), vk::Result> {
         let frame = &self.framebuffer.frames[self.current_frame as usize];
         unsafe {
@@ -143,67 +168,10 @@ impl Renderer {
                 100_000_000, //100 milliseconds
             )?;
             self.base.device.reset_fences(std::slice::from_ref(&frame.fence))?;
-            //Update transformations
-            let offset = self.current_frame as u64 * self.scene.transforms_size as u64;
-            let data = self.base.device.map_memory(
-                self.scene.host_allocation,
-                offset,
-                self.scene.transforms_size as u64,
-                vk::MemoryMapFlags::empty()
-            )?;
-            self.scene.transform_matrices.as_ptr().copy_to_nonoverlapping(
-                data as *mut na::Matrix4<f32>,
-                self.scene.transform_matrices.len()
-            );
-            let memory_range = vk::MappedMemoryRange::builder()
-                .memory(self.scene.host_allocation)
-                .offset(offset as u64)
-                .size(self.scene.transforms_size as u64);
-            self.base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
-            self.base.device.unmap_memory(self.scene.host_allocation);
             //Record command buffer
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.base.device.begin_command_buffer(frame.command_buffer, &begin_info)?;
-            //Staging buffer barrier
-            let buffer_barrier = vk::BufferMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::HOST)
-                .src_access_mask(vk::AccessFlags2::HOST_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                .src_queue_family_index(self.base.graphics_queue_family)
-                .dst_queue_family_index(self.base.graphics_queue_family)
-                .buffer(self.scene.staging)
-                .offset(offset)
-                .size(self.scene.transforms_size as u64);
-            let dependency = vk::DependencyInfo::builder()
-                .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
-            self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
-            //Write to transformations buffer
-            let region = vk::BufferCopy::builder()
-                .src_offset(offset)
-                .dst_offset(offset)
-                .size(self.scene.transforms_size as u64);
-            self.base.device.cmd_copy_buffer(
-                frame.command_buffer,
-                self.scene.staging,
-                self.scene.transforms,
-                std::slice::from_ref(&region)
-            );
-            //Transformations buffer barrier
-            let buffer_barrier = vk::BufferMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
-                .src_queue_family_index(self.base.graphics_queue_family)
-                .dst_queue_family_index(self.base.graphics_queue_family)
-                .buffer(self.scene.transforms)
-                .offset(offset)
-                .size(self.scene.transforms_size as u64);
-            let dependency = vk::DependencyInfo::builder()
-                .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
-            self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             //Push constants
             let mut push_constants: [f32; 32] = [0.0; 32];
             push_constants[0..16].copy_from_slice(self.camera.view().as_slice());
@@ -218,6 +186,66 @@ impl Renderer {
                     4 * push_constants.len()
                 )
             );
+            //Update scenes
+            for scene in &self.scenes {
+                //Update transformations
+                let offset = self.current_frame as u64 * scene.transforms_size as u64;
+                let data = self.base.device.map_memory(
+                    scene.host_allocation,
+                    offset,
+                    scene.transforms_size as u64,
+                    vk::MemoryMapFlags::empty()
+                )?;
+                scene.transform_matrices.as_ptr().copy_to_nonoverlapping(
+                    data as *mut na::Matrix4<f32>,
+                    scene.transform_matrices.len()
+                );
+                let memory_range = vk::MappedMemoryRange::builder()
+                    .memory(scene.host_allocation)
+                    .offset(offset as u64)
+                    .size(scene.transforms_size as u64);
+                self.base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
+                self.base.device.unmap_memory(scene.host_allocation);
+                //Staging buffer barrier
+                let buffer_barrier = vk::BufferMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::HOST)
+                    .src_access_mask(vk::AccessFlags2::HOST_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                    .src_queue_family_index(self.base.graphics_queue_family)
+                    .dst_queue_family_index(self.base.graphics_queue_family)
+                    .buffer(scene.staging)
+                    .offset(offset)
+                    .size(scene.transforms_size as u64);
+                let dependency = vk::DependencyInfo::builder()
+                    .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+                self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
+                //Write to transformations buffer
+                let region = vk::BufferCopy::builder()
+                    .src_offset(offset)
+                    .dst_offset(offset)
+                    .size(scene.transforms_size as u64);
+                self.base.device.cmd_copy_buffer(
+                    frame.command_buffer,
+                    scene.staging,
+                    scene.transforms,
+                    std::slice::from_ref(&region)
+                );
+                //Transformations buffer barrier
+                let buffer_barrier = vk::BufferMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::VERTEX_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
+                    .src_queue_family_index(self.base.graphics_queue_family)
+                    .dst_queue_family_index(self.base.graphics_queue_family)
+                    .buffer(scene.transforms)
+                    .offset(offset)
+                    .size(scene.transforms_size as u64);
+                let dependency = vk::DependencyInfo::builder()
+                    .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+                self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
+            }
             //Drawing
             let render_area = vk::Rect2D::builder()
                 .offset(vk::Offset2D::default())
@@ -228,7 +256,7 @@ impl Renderer {
                 vk::ClearValue {depth_stencil: *vk::ClearDepthStencilValue::builder().depth(1.0)} //Depth
             ];
             let begin_info = vk::RenderPassBeginInfo::builder()
-                .render_pass(self.framebuffer.render_pass)
+                .render_pass(self.renderpass.render_pass)
                 .framebuffer(frame.framebuffer)
                 .render_area(*render_area)
                 .clear_values(&clear_values);
@@ -240,8 +268,9 @@ impl Renderer {
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.framebuffer.pipeline
+                self.renderpass.light_pipe
             );
+            //TODO: Per-scene descriptor sets
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -250,25 +279,28 @@ impl Renderer {
                 std::slice::from_ref(&frame.descriptor_set),
                 &[]
             );
-            self.base.device.cmd_bind_vertex_buffers(
-                frame.command_buffer,
-                0,
-                std::slice::from_ref(&self.scene.vertices),
-                &[0]
-            );
-            self.base.device.cmd_bind_index_buffer(
-                frame.command_buffer,
-                self.scene.indices,
-                0,
-                vk::IndexType::UINT16
-            );
-            self.base.device.cmd_draw_indexed_indirect(
-                frame.command_buffer,
-                self.scene.draw_commands,
-                0,
-                self.scene.mesh_count,
-                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
-            );
+            //Draw scene
+            for scene in &mut self.scenes {
+                self.base.device.cmd_bind_vertex_buffers(
+                    frame.command_buffer,
+                    0,
+                    std::slice::from_ref(&scene.vertices),
+                    &[0]
+                );
+                self.base.device.cmd_bind_index_buffer(
+                    frame.command_buffer,
+                    scene.indices,
+                    0,
+                    vk::IndexType::UINT16
+                );
+                self.base.device.cmd_draw_indexed_indirect(
+                    frame.command_buffer,
+                    scene.draw_commands,
+                    0,
+                    scene.mesh_count,
+                    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
+                );
+            }
             self.base.device.cmd_end_render_pass(frame.command_buffer);
             //Pre-blitting image transition
             let subresource_range = vk::ImageSubresourceRange::builder()
@@ -386,10 +418,6 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
             self.base.device.queue_wait_idle(self.base.graphics_queue).unwrap();
-            self.scene.destroy(&self.base);
-            self.swapchain.destroy();
-            self.framebuffer.destroy(&self.base);
-            self.base.destroy();
         }
     }
 }

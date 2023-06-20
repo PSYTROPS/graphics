@@ -210,14 +210,6 @@ impl Base {
         }
     }
 
-    pub fn create_shader_module<P: AsRef<std::path::Path>>(&self, filename: P)
-        -> Result<vk::ShaderModule, vk::Result> {
-        let mut file = std::fs::File::open(filename).unwrap();
-        let code = ash::util::read_spv(&mut file).unwrap();
-        let create_info = vk::ShaderModuleCreateInfo::builder().code(&code);
-        unsafe {self.device.create_shader_module(&create_info, None)}
-    }
-
     ///Allocate a memory block which satisfies the given memory requirements.
     ///Note that buffers & images cannot share a memory block.
     fn allocate(

@@ -75,11 +75,21 @@ impl RenderPass {
             base.device.create_render_pass(&create_info, None)
         }?;
         //Pipeline
-        let mut shader_dir = std::env::current_exe().unwrap();
-        shader_dir.pop();
-        shader_dir.push("shaders/");
-        let vertex_shader = base.create_shader_module(shader_dir.join("pbr.vert.spv"))?;
-        let fragment_shader = base.create_shader_module(shader_dir.join("pbr.frag.spv"))?;
+        //Shaders
+        let code = ash::util::read_spv(
+            &mut std::io::Cursor::new(include_bytes!("../spv/pbr.vert.spv"))
+        ).unwrap();
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(&code);
+        let vertex_shader = unsafe {
+            base.device.create_shader_module(&create_info, None)?
+        };
+        let code = ash::util::read_spv(
+            &mut std::io::Cursor::new(include_bytes!("../spv/pbr.frag.spv"))
+        ).unwrap();
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(&code);
+        let fragment_shader = unsafe {
+            base.device.create_shader_module(&create_info, None)?
+        };
         let shader_stages = [
             *vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vk::ShaderStageFlags::VERTEX)

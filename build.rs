@@ -8,9 +8,7 @@ fn compile_shaders() {
     let shader_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("shaders");
     let output_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("target")
-        .join(&std::env::var("PROFILE").unwrap())
-        .join("shaders");
+        .join("spv");
     if !output_dir.exists() {
         std::fs::create_dir(output_dir.clone()).unwrap();
     }

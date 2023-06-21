@@ -59,7 +59,6 @@ impl Textures {
                 base.device.create_image_view(&create_info, None).unwrap()
             }
         }).collect();
-        assert!(images.len() == image_views.len());
         //Create staging buffer
         let create_info = vk::BufferCreateInfo::builder()
             .size(assets.iter().fold(
@@ -88,10 +87,10 @@ impl Textures {
             base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
             base.device.unmap_memory(staging_alloc);
             //Record commands
-            //Pipeline barrier
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             base.device.begin_command_buffer(base.transfer_command_buffer, &begin_info)?;
+            //Pipeline barrier
             let image_barriers: Vec<_> = images.iter().map(|image| {
                 let subresource_range = vk::ImageSubresourceRange::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -176,7 +175,7 @@ impl Textures {
             base.device.wait_for_fences(
                 std::slice::from_ref(&base.transfer_fence),
                 false,
-                1_000_000_000, //8 seconds
+                1_000_000_000,
             )?;
             base.device.reset_fences(std::slice::from_ref(&base.transfer_fence))?;
             base.device.destroy_buffer(staging[0], None);

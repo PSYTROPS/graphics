@@ -7,6 +7,7 @@ use framebuffer::Framebuffer;
 use swapchain::Swapchain;
 use camera::Camera;
 use device_scene::DeviceScene;
+use environment::Environment;
 
 use std::rc::Rc;
 
@@ -18,6 +19,7 @@ mod swapchain;
 mod camera;
 mod device_scene;
 mod textures;
+mod environment;
 
 pub struct Renderer {
     base: Rc<Base>,
@@ -27,6 +29,7 @@ pub struct Renderer {
     //Scene data
     pub camera: Camera,
     scenes: Vec<DeviceScene>,
+    environment: Environment,
     current_frame: u32
 }
 
@@ -41,6 +44,12 @@ impl Renderer {
         let framebuffer = Framebuffer::new(base.clone(), &renderpass, 2)?;
         let swapchain = Swapchain::new(&base, None)?;
         let camera = Camera::new();
+        let environment = Environment::new(
+            base.clone(),
+            include_bytes!("../assets/textures/diffuse.ktx2"),
+            include_bytes!("../assets/textures/diffuse.ktx2"),
+            include_bytes!("../assets/textures/specular.ktx2")
+        )?;
         Ok(Renderer {
             base,
             renderpass,
@@ -48,6 +57,7 @@ impl Renderer {
             swapchain,
             camera,
             scenes: vec![],
+            environment,
             current_frame: 0
         })
     }

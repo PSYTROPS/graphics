@@ -37,6 +37,7 @@ struct PointLight {
 layout(std140, set=0, binding=4) restrict readonly buffer light_buffer {
 	PointLight point_lights[64];
 };
+layout(set=0, binding=5) uniform samplerCube cubes[2];
 
 //Distribution term
 float distribution(vec3 l, vec3 v, vec3 n, float roughness) {

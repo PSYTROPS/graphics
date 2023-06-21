@@ -30,6 +30,8 @@ pub struct Renderer {
     pub camera: Camera,
     scenes: Vec<DeviceScene>,
     environment: Environment,
+    skybox_vertex_buffer: vk::Buffer,
+    skybox_vertex_alloc: vk::DeviceMemory,
     current_frame: u32
 }
 
@@ -46,10 +48,69 @@ impl Renderer {
         let camera = Camera::new();
         let environment = Environment::new(
             base.clone(),
-            include_bytes!("../assets/textures/diffuse.ktx2"),
+            include_bytes!("../assets/textures/specular.ktx2"),
             include_bytes!("../assets/textures/diffuse.ktx2"),
             include_bytes!("../assets/textures/specular.ktx2")
         )?;
+        //Bind environment map descriptors
+        let image_infos = [1, 2].map(|i|
+            *vk::DescriptorImageInfo::builder()
+                .sampler(environment.sampler)
+                .image_view(environment.image_views[i])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        );
+        let mut writes: Vec<vk::WriteDescriptorSet> = framebuffer.frames.iter().map(|frame| {
+            *vk::WriteDescriptorSet::builder()
+                .dst_set(frame.descriptor_set[0])
+                .dst_binding(5)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&image_infos)
+        }).collect();
+        //Bind skybox descriptors
+        for frame in &framebuffer.frames {
+            let image_info = vk::DescriptorImageInfo::builder()
+                .sampler(environment.sampler)
+                .image_view(environment.image_views[0])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            writes.push(
+                *vk::WriteDescriptorSet::builder()
+                    .dst_set(frame.descriptor_set[1])
+                    .dst_binding(0)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&image_info))
+            )
+        }
+        unsafe {
+            base.device.update_descriptor_sets(&writes, &[]);
+        }
+        //Skybox mesh
+        let skybox_vertices: [f32; 3 * 14] = [
+            1.0, -1.0, -1.0,
+            1.0, 1.0, -1.0,
+            1.0, -1.0, 1.0,
+            1.0, 1.0, 1.0,
+            -1.0, 1.0, 1.0,
+            1.0, 1.0, -1.0,
+            -1.0, 1.0, -1.0,
+            1.0, -1.0, -1.0,
+            -1.0, -1.0, -1.0,
+            1.0, -1.0, 1.0,
+            -1.0, -1.0, 1.0,
+            -1.0, 1.0, 1.0,
+            -1.0, -1.0, -1.0,
+            -1.0, 1.0, -1.0
+        ];
+        let create_info = vk::BufferCreateInfo::builder()
+            .size(skybox_vertices.len() as u64 * 4)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let (vertex_buffers, vertex_alloc) = base.create_buffers(
+            std::slice::from_ref(&create_info),
+            vk::MemoryPropertyFlags::HOST_VISIBLE
+        )?;
+        base.staged_buffer_write(skybox_vertices.as_ptr(), vertex_buffers[0], skybox_vertices.len())?;
         Ok(Renderer {
             base,
             renderpass,
@@ -58,6 +119,8 @@ impl Renderer {
             camera,
             scenes: vec![],
             environment,
+            skybox_vertex_buffer: vertex_buffers[0],
+            skybox_vertex_alloc: vertex_alloc,
             current_frame: 0
         })
     }
@@ -72,7 +135,7 @@ impl Renderer {
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         ).collect();
         image_infos.extend(std::iter::repeat(image_infos[0].clone())
-            .take(base::MAX_TEXTURES as usize - image_infos.len())
+            .take(renderpass::MAX_TEXTURES as usize - image_infos.len())
         );
         for (i, frame) in self.framebuffer.frames.iter().enumerate() {
             //Transforms
@@ -81,7 +144,7 @@ impl Renderer {
                 .offset((i * dev_scene.transforms_size) as u64)
                 .range(dev_scene.transforms_size as u64);
             writes.push(*vk::WriteDescriptorSet::builder()
-                .dst_set(frame.descriptor_set)
+                .dst_set(frame.descriptor_set[0])
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -93,7 +156,7 @@ impl Renderer {
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             writes.push(*vk::WriteDescriptorSet::builder()
-                .dst_set(frame.descriptor_set)
+                .dst_set(frame.descriptor_set[0])
                 .dst_binding(1)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -101,7 +164,7 @@ impl Renderer {
             );
             //Textures
             writes.push(*vk::WriteDescriptorSet::builder()
-                .dst_set(frame.descriptor_set)
+                .dst_set(frame.descriptor_set[0])
                 .dst_binding(3)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
@@ -113,7 +176,7 @@ impl Renderer {
                 .offset(0)
                 .range(vk::WHOLE_SIZE);
             writes.push(*vk::WriteDescriptorSet::builder()
-                .dst_set(frame.descriptor_set)
+                .dst_set(frame.descriptor_set[0])
                 .dst_binding(4)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -188,7 +251,7 @@ impl Renderer {
             push_constants[16..32].copy_from_slice(self.camera.projection().as_slice());
             self.base.device.cmd_push_constants(
                 frame.command_buffer,
-                self.base.pipeline_layout,
+                self.renderpass.mesh_pipeline.pipeline_layout,
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -275,18 +338,19 @@ impl Renderer {
                 &begin_info,
                 vk::SubpassContents::INLINE
             );
+            //Draw meshes
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.renderpass.light_pipe
+                self.renderpass.mesh_pipeline.pipeline
             );
             //TODO: Per-scene descriptor sets
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.base.pipeline_layout,
+                self.renderpass.mesh_pipeline.pipeline_layout,
                 0,
-                std::slice::from_ref(&frame.descriptor_set),
+                std::slice::from_ref(&frame.descriptor_set[0]),
                 &[]
             );
             //Draw scene
@@ -311,6 +375,28 @@ impl Renderer {
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
                 );
             }
+            //Draw skybox
+            self.base.device.cmd_bind_pipeline(
+                frame.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.renderpass.skybox_pipeline.pipeline
+            );
+            //TODO: Per-scene descriptor sets
+            self.base.device.cmd_bind_descriptor_sets(
+                frame.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.renderpass.skybox_pipeline.pipeline_layout,
+                0,
+                std::slice::from_ref(&frame.descriptor_set[1]),
+                &[]
+            );
+            self.base.device.cmd_bind_vertex_buffers(
+                frame.command_buffer,
+                0,
+                std::slice::from_ref(&self.skybox_vertex_buffer),
+                &[0]
+            );
+            self.base.device.cmd_draw(frame.command_buffer, 14, 1, 0, 0);
             self.base.device.cmd_end_render_pass(frame.command_buffer);
             //Pre-blitting image transition
             let subresource_range = vk::ImageSubresourceRange::builder()
@@ -428,6 +514,8 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
             self.base.device.queue_wait_idle(self.base.graphics_queue).unwrap();
+            self.base.device.destroy_buffer(self.skybox_vertex_buffer, None);
+            self.base.device.free_memory(self.skybox_vertex_alloc, None);
         }
     }
 }

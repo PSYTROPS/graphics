@@ -25,7 +25,8 @@ pub struct Frame {
     pub image_views: [vk::ImageView; 3],
     pub framebuffer: vk::Framebuffer,
     pub command_buffer: vk::CommandBuffer,
-    pub descriptor_set: vk::DescriptorSet,
+    //Descriptor sets: [mesh, skybox]
+    pub descriptor_set: [vk::DescriptorSet; 2],
     //Synchronization
     /*
         Semaphores:
@@ -74,15 +75,20 @@ impl Framebuffer {
                 .descriptor_count(frame_count),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(frame_count * super::base::MAX_TEXTURES)
+                .descriptor_count(frame_count * super::renderpass::MAX_TEXTURES),
+            *vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(3 * frame_count)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets(frame_count)
+            .max_sets(2 * frame_count)
             .pool_sizes(&pool_sizes);
         let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
         //Descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> =
-            (0..frame_count).map(|_| base.descriptor_set_layout).collect();
+            (0..frame_count).map(|_| renderpass.mesh_pipeline.descriptor_set_layout)
+            .chain((0..frame_count).map(|_| renderpass.skybox_pipeline.descriptor_set_layout))
+            .collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
@@ -217,7 +223,7 @@ impl Framebuffer {
                 image_views,
                 framebuffer,
                 command_buffer,
-                descriptor_set: descriptor_sets[i as usize],
+                descriptor_set: [descriptor_sets[i as usize], descriptor_sets[(i + frame_count) as usize]],
                 semaphores,
                 fence
             });

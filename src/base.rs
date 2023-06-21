@@ -4,10 +4,6 @@ use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 
-//Remember to match these values in the fragment shader
-pub const MAX_TEXTURES: u32 = 64;
-//pub const MAX_LIGHTS: u32 = 64;
-
 ///Container for persistent Vulkan objects (created once and never reassigned).
 ///Used to create transient Vulkan objects.
 pub struct Base {
@@ -24,10 +20,6 @@ pub struct Base {
     pub transfer_command_buffer: vk::CommandBuffer,
     pub transfer_fence: vk::Fence,
     pub pipeline_cache: vk::PipelineCache,
-    //Layout
-    pub sampler: vk::Sampler,
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub pipeline_layout: vk::PipelineLayout
 }
 
 impl Base {
@@ -134,62 +126,6 @@ impl Base {
                 vk::PipelineCacheCreateInfo::builder()
             };
             let pipeline_cache = device.create_pipeline_cache(&create_info, None)?;
-            //Sampler
-            let create_info = vk::SamplerCreateInfo::builder()
-                .mag_filter(vk::Filter::NEAREST)
-                .min_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
-                .anisotropy_enable(false);
-            let sampler = device.create_sampler(&create_info, None)?;
-            //Descriptor set layout
-            let bindings = [
-                //Transforms
-                *vk::DescriptorSetLayoutBinding::builder()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::VERTEX),
-                //Materials
-                *vk::DescriptorSetLayoutBinding::builder()
-                    .binding(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                //Sampler
-                *vk::DescriptorSetLayoutBinding::builder()
-                    .binding(2)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                    .immutable_samplers(std::slice::from_ref(&sampler)),
-                //Textures
-                *vk::DescriptorSetLayoutBinding::builder()
-                    .binding(3)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .descriptor_count(MAX_TEXTURES)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                //Lights
-                *vk::DescriptorSetLayoutBinding::builder()
-                    .binding(4)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            ];
-            let create_info = vk::DescriptorSetLayoutCreateInfo::builder()
-                .bindings(&bindings);
-            let descriptor_set_layout = device.create_descriptor_set_layout(&create_info, None)?;
-            //Pipeline layout
-            let push_constant = vk::PushConstantRange::builder()
-                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-                .offset(0)
-                .size(2 * 16 * 4);
-            let create_info = vk::PipelineLayoutCreateInfo::builder()
-                .set_layouts(std::slice::from_ref(&descriptor_set_layout))
-                .push_constant_ranges(std::slice::from_ref(&push_constant));
-            let pipeline_layout = device.create_pipeline_layout(&create_info, None)?;
             Ok(Self {
                 entry,
                 instance,
@@ -202,10 +138,7 @@ impl Base {
                 command_pool,
                 transfer_command_buffer,
                 transfer_fence,
-                pipeline_cache,
-                sampler,
-                descriptor_set_layout,
-                pipeline_layout
+                pipeline_cache
             })
         }
     }
@@ -378,9 +311,6 @@ impl Drop for Base {
             //Destroy Vulkan objects
             self.device.device_wait_idle().unwrap();
             self.device.destroy_pipeline_cache(self.pipeline_cache, None);
-            self.device.destroy_sampler(self.sampler, None);
-            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.device.destroy_fence(self.transfer_fence, None);
             self.device.free_command_buffers(self.command_pool, &[self.transfer_command_buffer]);
             self.device.destroy_command_pool(self.command_pool, None);

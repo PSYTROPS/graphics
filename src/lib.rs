@@ -422,9 +422,13 @@ impl Renderer {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.base.device.begin_command_buffer(frame.command_buffer, &begin_info)?;
             //Push constants
-            let mut push_constants: [f32; 32] = [0.0; 32];
+            let mut push_constants: [f32; 36] = [0.0; 36];
             push_constants[0..16].copy_from_slice(self.camera.view().as_slice());
             push_constants[16..32].copy_from_slice(self.camera.projection().as_slice());
+            push_constants[32] = self.camera.pos.x;
+            push_constants[33] = self.camera.pos.y;
+            push_constants[34] = self.camera.pos.z;
+            push_constants[35] = 0.0;
             self.base.device.cmd_push_constants(
                 frame.command_buffer,
                 self.framebuffer.pipelines[0].pipeline_layout,

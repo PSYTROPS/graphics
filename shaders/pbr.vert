@@ -16,6 +16,7 @@ layout(location=3) out uint out_material;
 layout(push_constant) uniform constants {
 	mat4 view;
 	mat4 projection;
+	vec4 camera_pos;
 };
 
 //Descriptors
@@ -26,9 +27,10 @@ layout(set=0, binding=0) restrict readonly buffer storage {
 void main() {
 	const vec4 pos = vec4(in_pos, 1.0); //Model-space position
 	const mat4 t = transformations[gl_DrawID];
-	gl_Position = projection * view * t * pos;
-	out_pos = vec3(view * t * pos);
-	out_normal = normalize(vec3(transpose(inverse(view * t)) * vec4(in_normal, 0.0)));
+	const vec4 world_pos = t * pos;
+	gl_Position = projection * view * world_pos;
+	out_pos = world_pos.xyz;
+	out_normal = normalize(vec3(transpose(inverse(t)) * vec4(in_normal, 0.0)));
 	out_texcoords = in_texcoords;
 	out_material = in_material;
 }

@@ -12,8 +12,8 @@ pub fn new(
 ) -> Result<Pipeline, vk::Result> {
     //Sampler
     let create_info = vk::SamplerCreateInfo::builder()
-        .mag_filter(vk::Filter::NEAREST)
-        .min_filter(vk::Filter::NEAREST)
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
         .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
         .address_mode_u(vk::SamplerAddressMode::REPEAT)
         .address_mode_v(vk::SamplerAddressMode::REPEAT)
@@ -77,7 +77,7 @@ pub fn new(
     let push_constant = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
         .offset(0)
-        .size(2 * 16 * 4);
+        .size(2 * 16 * 4 + 4 * 4);
     let create_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(std::slice::from_ref(&descriptor_set_layout))
         .push_constant_ranges(std::slice::from_ref(&push_constant));

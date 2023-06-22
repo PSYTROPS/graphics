@@ -2,7 +2,6 @@ use ash::vk;
 use nalgebra as na;
 
 use base::Base;
-use renderpass::RenderPass;
 use framebuffer::Framebuffer;
 use swapchain::Swapchain;
 use camera::Camera;
@@ -13,17 +12,22 @@ use std::rc::Rc;
 
 pub mod scene;
 mod base;
-mod renderpass;
 mod framebuffer;
 mod swapchain;
 mod camera;
 mod device_scene;
 mod textures;
 mod environment;
+mod pipeline;
+
+pub const COLOR_FORMAT: vk::Format = vk::Format::B8G8R8A8_SRGB;
+pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+pub const SAMPLE_COUNT: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_4;
+pub const MAX_TEXTURES: u32 = 64;
+//pub const MAX_LIGHTS: u32 = 64;
 
 pub struct Renderer {
     base: Rc<Base>,
-    renderpass: RenderPass,
     framebuffer: Framebuffer,
     swapchain: Swapchain,
     //Scene data
@@ -32,6 +36,10 @@ pub struct Renderer {
     environment: Environment,
     skybox_vertex_buffer: vk::Buffer,
     skybox_vertex_alloc: vk::DeviceMemory,
+    dfg_lookup: vk::Image,
+    dfg_lookup_view: vk::ImageView,
+    dfg_lookup_sampler: vk::Sampler,
+    dfg_lookup_alloc: vk::DeviceMemory,
     current_frame: u32
 }
 
@@ -42,15 +50,14 @@ impl Renderer {
             width: 1024,
             height: 1024
         };
-        let renderpass = RenderPass::new(base.clone(), extent)?;
-        let framebuffer = Framebuffer::new(base.clone(), &renderpass, 2)?;
+        let framebuffer = Framebuffer::new(base.clone(), extent, 2)?;
         let swapchain = Swapchain::new(&base, None)?;
         let camera = Camera::new();
         let environment = Environment::new(
             base.clone(),
-            include_bytes!("../assets/textures/specular.ktx2"),
-            include_bytes!("../assets/textures/diffuse.ktx2"),
-            include_bytes!("../assets/textures/specular.ktx2")
+            include_bytes!("../assets/specular.ktx2"),
+            include_bytes!("../assets/diffuse.ktx2"),
+            include_bytes!("../assets/specular.ktx2")
         )?;
         //Bind environment map descriptors
         let image_infos = [1, 2].map(|i|
@@ -111,9 +118,174 @@ impl Renderer {
             vk::MemoryPropertyFlags::HOST_VISIBLE
         )?;
         base.staged_buffer_write(skybox_vertices.as_ptr(), vertex_buffers[0], skybox_vertices.len())?;
+        //DFG lookup texture
+        let dfg_lookup_bytes = include_bytes!("../assets/dfg_lut.bin");
+        let extent = vk::Extent3D::builder().width(256).height(256).depth(1);
+        let create_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R16G16B16A16_SFLOAT)
+            .extent(*extent)
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let (lut_images, lut_allocation) = base.create_images(
+            std::slice::from_ref(&create_info),
+            vk::MemoryPropertyFlags::DEVICE_LOCAL
+        )?;
+        let create_info = vk::BufferCreateInfo::builder()
+			.size(dfg_lookup_bytes.len() as u64)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let (staging, staging_alloc) = base.create_buffers(
+            std::slice::from_ref(&create_info),
+            vk::MemoryPropertyFlags::HOST_VISIBLE
+        )?;
+		unsafe {
+			//Write to staging buffer
+            let data = base.device.map_memory(staging_alloc, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
+			dfg_lookup_bytes.as_ptr().copy_to_nonoverlapping(
+                data as *mut u8, dfg_lookup_bytes.len()
+            );
+            let memory_range = vk::MappedMemoryRange::builder()
+                .memory(staging_alloc)
+                .offset(0)
+                .size(vk::WHOLE_SIZE);
+            base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
+            base.device.unmap_memory(staging_alloc);
+			//Record command buffer
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            base.device.begin_command_buffer(base.transfer_command_buffer, &begin_info)?;
+			//Pipeline barrier
+            let subresource_range = vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1);
+            let barrier = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(base.graphics_queue_family)
+                .dst_queue_family_index(base.graphics_queue_family)
+                .image(lut_images[0])
+                .subresource_range(*subresource_range);
+            let dependency = vk::DependencyInfo::builder()
+                .image_memory_barriers(std::slice::from_ref(&barrier));
+            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
+			//Copy buffer to images
+            let subresource = vk::ImageSubresourceLayers::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .mip_level(0)
+                .base_array_layer(0)
+                .layer_count(1);
+            let region = vk::BufferImageCopy2::builder()
+                .buffer_offset(0)
+                .image_subresource(*subresource)
+                .image_offset(vk::Offset3D::default())
+                .image_extent(*extent);
+            let copy = vk::CopyBufferToImageInfo2::builder()
+                .src_buffer(staging[0])
+                .dst_image(lut_images[0])
+                .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .regions(std::slice::from_ref(&region));
+            base.device.cmd_copy_buffer_to_image2(base.transfer_command_buffer, &copy);
+            //Barrier
+            let subresource_range = vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1);
+            let barrier = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(base.graphics_queue_family)
+                .dst_queue_family_index(base.graphics_queue_family)
+                .image(lut_images[0])
+                .subresource_range(*subresource_range);
+            let dependency = vk::DependencyInfo::builder()
+                .image_memory_barriers(std::slice::from_ref(&barrier));
+            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
+            base.device.end_command_buffer(base.transfer_command_buffer)?;
+			//Submit command buffer to queue
+			let submit_info = vk::SubmitInfo::builder()
+				.command_buffers(std::slice::from_ref(&base.transfer_command_buffer));
+            base.device.queue_submit(
+                base.graphics_queue,
+                std::slice::from_ref(&submit_info),
+                base.transfer_fence
+            )?;
+            base.device.wait_for_fences(
+                std::slice::from_ref(&base.transfer_fence),
+                false,
+                1_000_000_000,
+            )?;
+            base.device.reset_fences(std::slice::from_ref(&base.transfer_fence))?;
+            base.device.destroy_buffer(staging[0], None);
+            base.device.free_memory(staging_alloc, None);
+		}
+        //DGF lookup image view
+        let component_mapping = vk::ComponentMapping::builder()
+            .r(vk::ComponentSwizzle::IDENTITY)
+            .g(vk::ComponentSwizzle::IDENTITY)
+            .b(vk::ComponentSwizzle::IDENTITY)
+            .a(vk::ComponentSwizzle::IDENTITY);
+        let subresource_range = vk::ImageSubresourceRange::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1);
+        let create_info = vk::ImageViewCreateInfo::builder()
+            .image(lut_images[0])
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(vk::Format::R16G16B16A16_SFLOAT)
+            .components(*component_mapping)
+            .subresource_range(*subresource_range);
+        let dfg_lookup_view = unsafe {
+            base.device.create_image_view(&create_info, None).unwrap()
+        };
+        //DFG lookup sampler
+        let create_info = vk::SamplerCreateInfo::builder()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .anisotropy_enable(false);
+        let dfg_lookup_sampler = unsafe {base.device.create_sampler(&create_info, None)?};
+        //Bind DFG lookup descriptors
+        let image_info = vk::DescriptorImageInfo::builder()
+            .sampler(dfg_lookup_sampler)
+            .image_view(dfg_lookup_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let writes: Vec<vk::WriteDescriptorSet> = framebuffer.frames.iter().map(|frame| {
+            *vk::WriteDescriptorSet::builder()
+                .dst_set(frame.descriptor_set[0])
+                .dst_binding(6)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&image_info))
+        }).collect();
+        unsafe {
+            base.device.update_descriptor_sets(&writes, &[]);
+        }
         Ok(Renderer {
             base,
-            renderpass,
             framebuffer,
             swapchain,
             camera,
@@ -121,6 +293,10 @@ impl Renderer {
             environment,
             skybox_vertex_buffer: vertex_buffers[0],
             skybox_vertex_alloc: vertex_alloc,
+            dfg_lookup: lut_images[0],
+            dfg_lookup_view,
+            dfg_lookup_sampler,
+            dfg_lookup_alloc: lut_allocation,
             current_frame: 0
         })
     }
@@ -135,7 +311,7 @@ impl Renderer {
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         ).collect();
         image_infos.extend(std::iter::repeat(image_infos[0].clone())
-            .take(renderpass::MAX_TEXTURES as usize - image_infos.len())
+            .take(MAX_TEXTURES as usize - image_infos.len())
         );
         for (i, frame) in self.framebuffer.frames.iter().enumerate() {
             //Transforms
@@ -251,7 +427,7 @@ impl Renderer {
             push_constants[16..32].copy_from_slice(self.camera.projection().as_slice());
             self.base.device.cmd_push_constants(
                 frame.command_buffer,
-                self.renderpass.mesh_pipeline.pipeline_layout,
+                self.framebuffer.pipelines[0].pipeline_layout,
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -329,7 +505,7 @@ impl Renderer {
                 vk::ClearValue {depth_stencil: *vk::ClearDepthStencilValue::builder().depth(1.0)} //Depth
             ];
             let begin_info = vk::RenderPassBeginInfo::builder()
-                .render_pass(self.renderpass.render_pass)
+                .render_pass(self.framebuffer.render_pass)
                 .framebuffer(frame.framebuffer)
                 .render_area(*render_area)
                 .clear_values(&clear_values);
@@ -342,13 +518,13 @@ impl Renderer {
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.renderpass.mesh_pipeline.pipeline
+                self.framebuffer.pipelines[0].pipeline
             );
             //TODO: Per-scene descriptor sets
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.renderpass.mesh_pipeline.pipeline_layout,
+                self.framebuffer.pipelines[0].pipeline_layout,
                 0,
                 std::slice::from_ref(&frame.descriptor_set[0]),
                 &[]
@@ -379,13 +555,12 @@ impl Renderer {
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.renderpass.skybox_pipeline.pipeline
+                self.framebuffer.pipelines[1].pipeline
             );
-            //TODO: Per-scene descriptor sets
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.renderpass.skybox_pipeline.pipeline_layout,
+                self.framebuffer.pipelines[1].pipeline_layout,
                 0,
                 std::slice::from_ref(&frame.descriptor_set[1]),
                 &[]
@@ -516,6 +691,10 @@ impl Drop for Renderer {
             self.base.device.queue_wait_idle(self.base.graphics_queue).unwrap();
             self.base.device.destroy_buffer(self.skybox_vertex_buffer, None);
             self.base.device.free_memory(self.skybox_vertex_alloc, None);
+            self.base.device.destroy_sampler(self.dfg_lookup_sampler, None);
+            self.base.device.destroy_image_view(self.dfg_lookup_view, None);
+            self.base.device.destroy_image(self.dfg_lookup, None);
+            self.base.device.free_memory(self.dfg_lookup_alloc, None);
         }
     }
 }

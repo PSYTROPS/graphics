@@ -200,10 +200,11 @@ impl Environment {
             .mag_filter(vk::Filter::LINEAR)
             .min_filter(vk::Filter::LINEAR)
             .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .anisotropy_enable(false);
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(false)
+            .max_lod(vk::LOD_CLAMP_NONE);
         let sampler = unsafe {base.device.create_sampler(&create_info, None)?};
 		Ok(Environment{
 			base,

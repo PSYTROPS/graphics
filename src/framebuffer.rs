@@ -1,12 +1,14 @@
 use ash::vk;
+use crate::{COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT, MAX_TEXTURES};
 use super::base::Base;
-use super::renderpass::RenderPass;
-use super::renderpass;
+use super::pipeline;
 use std::rc::Rc;
 
 pub struct Framebuffer {
     base: Rc<Base>,
     pub extent: vk::Extent2D,
+    pub render_pass: vk::RenderPass,
+    pub pipelines: [pipeline::Pipeline; 2],
     pub descriptor_pool: vk::DescriptorPool,
     pub image_allocation: vk::DeviceMemory,
     pub frames: Vec<Frame>
@@ -25,8 +27,7 @@ pub struct Frame {
     pub image_views: [vk::ImageView; 3],
     pub framebuffer: vk::Framebuffer,
     pub command_buffer: vk::CommandBuffer,
-    //Descriptor sets: [mesh, skybox]
-    pub descriptor_set: [vk::DescriptorSet; 2],
+    pub descriptor_set: [vk::DescriptorSet; 2], //[mesh, skybox]
     //Synchronization
     /*
         Semaphores:
@@ -62,9 +63,72 @@ impl Drop for Frame {
 impl Framebuffer {
     pub fn new(
         base: Rc<Base>,
-        renderpass: &RenderPass,
+        extent: vk::Extent2D,
         frame_count: u32
     ) -> Result<Self, vk::Result> {
+        //Render pass
+        let attachments = [
+            //Color attachment
+            *vk::AttachmentDescription::builder()
+                .format(COLOR_FORMAT)
+                .samples(SAMPLE_COUNT)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            //Resolve attachment
+            *vk::AttachmentDescription::builder()
+                .format(COLOR_FORMAT)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            //Depth attachment
+            *vk::AttachmentDescription::builder()
+                .format(DEPTH_FORMAT)
+                .samples(SAMPLE_COUNT)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        ];
+        let references = [
+            *vk::AttachmentReference::builder()
+                .attachment(0)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            *vk::AttachmentReference::builder()
+                .attachment(1)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+            *vk::AttachmentReference::builder()
+                .attachment(2)
+                .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        ];
+        let subpasses = [
+            vk::SubpassDescription::builder()
+                .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+                .color_attachments(&references[0..1])
+                .resolve_attachments(&references[1..2])
+                .depth_stencil_attachment(&references[2])
+                .build()
+        ];
+        let create_info = vk::RenderPassCreateInfo::builder()
+            .attachments(attachments.as_slice())
+            .subpasses(subpasses.as_slice());
+        let render_pass = unsafe {
+            base.device.create_render_pass(&create_info, None)?
+        };
+        //Pipelines
+        let pipelines = [
+            pipeline::mesh::new(base.clone(), extent, render_pass)?,
+            pipeline::skybox::new(base.clone(), extent, render_pass)?
+        ];
         //Descriptor pool
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
@@ -75,10 +139,10 @@ impl Framebuffer {
                 .descriptor_count(frame_count),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(frame_count * super::renderpass::MAX_TEXTURES),
+                .descriptor_count(frame_count * MAX_TEXTURES),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(3 * frame_count)
+                .descriptor_count(4 * frame_count)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(2 * frame_count)
@@ -86,8 +150,8 @@ impl Framebuffer {
         let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
         //Descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> =
-            (0..frame_count).map(|_| renderpass.mesh_pipeline.descriptor_set_layout)
-            .chain((0..frame_count).map(|_| renderpass.skybox_pipeline.descriptor_set_layout))
+            std::iter::repeat(pipelines[0].descriptor_set_layout).take(frame_count as usize)
+            .chain(std::iter::repeat(pipelines[1].descriptor_set_layout).take(frame_count as usize))
             .collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
@@ -95,18 +159,18 @@ impl Framebuffer {
         let descriptor_sets = unsafe {base.device.allocate_descriptor_sets(&allocate_info)}?;
         //Frame images
         let extent_3d = vk::Extent3D::builder()
-            .width(renderpass.extent.width)
-            .height(renderpass.extent.height)
+            .width(extent.width)
+            .height(extent.height)
             .depth(1);
         let create_infos: Vec<vk::ImageCreateInfo> = [
             //Color image
             *vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(renderpass::COLOR_FORMAT)
+                .format(COLOR_FORMAT)
                 .extent(*extent_3d)
                 .mip_levels(1)
                 .array_layers(1)
-                .samples(renderpass::SAMPLE_COUNT)
+                .samples(SAMPLE_COUNT)
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -114,7 +178,7 @@ impl Framebuffer {
             //Resolve image
             *vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(renderpass::COLOR_FORMAT)
+                .format(COLOR_FORMAT)
                 .extent(*extent_3d)
                 .mip_levels(1)
                 .array_layers(1)
@@ -126,11 +190,11 @@ impl Framebuffer {
             //Depth image
             *vk::ImageCreateInfo::builder()
                 .image_type(vk::ImageType::TYPE_2D)
-                .format(renderpass::DEPTH_FORMAT)
+                .format(DEPTH_FORMAT)
                 .extent(*extent_3d)
                 .mip_levels(1)
                 .array_layers(1)
-                .samples(renderpass::SAMPLE_COUNT)
+                .samples(SAMPLE_COUNT)
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -140,7 +204,7 @@ impl Framebuffer {
             &create_infos, vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
         let mut image_chunks = images.chunks_exact(3);
-        //Frame command buffers
+        //Command buffers
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(base.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -175,21 +239,21 @@ impl Framebuffer {
                 vk::ImageViewCreateInfo::builder()
                     .image(images[0])
                     .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(renderpass::COLOR_FORMAT)
+                    .format(COLOR_FORMAT)
                     .components(*component_mapping)
                     .subresource_range(*color_subresource_range),
                 //Resolve image view
                 vk::ImageViewCreateInfo::builder()
                     .image(images[1])
                     .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(renderpass::COLOR_FORMAT)
+                    .format(COLOR_FORMAT)
                     .components(*component_mapping)
                     .subresource_range(*color_subresource_range),
                 //Depth image view
                 vk::ImageViewCreateInfo::builder()
                     .image(images[2])
                     .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(renderpass::DEPTH_FORMAT)
+                    .format(DEPTH_FORMAT)
                     .components(*component_mapping)
                     .subresource_range(*depth_subresource_range)
             ];
@@ -200,10 +264,10 @@ impl Framebuffer {
             );
             //Framebuffer
             let create_info = vk::FramebufferCreateInfo::builder()
-                .render_pass(renderpass.render_pass)
+                .render_pass(render_pass)
                 .attachments(&image_views)
-                .width(renderpass.extent.width)
-                .height(renderpass.extent.height)
+                .width(extent.width)
+                .height(extent.height)
                 .layers(1);
             let framebuffer = unsafe {base.device.create_framebuffer(&create_info, None)}?;
             //Command buffer
@@ -230,7 +294,9 @@ impl Framebuffer {
         }
         Ok(Self {
             base,
-            extent: renderpass.extent,
+            extent,
+            render_pass,
+            pipelines,
             descriptor_pool,
             image_allocation,
             frames
@@ -241,6 +307,7 @@ impl Framebuffer {
 impl Drop for Framebuffer {
     fn drop(&mut self) {
         unsafe {
+            self.base.device.destroy_render_pass(self.render_pass, None);
             self.base.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.base.device.free_memory(self.image_allocation, None);
         }

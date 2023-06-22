@@ -55,8 +55,8 @@ impl Camera {
             -self.pos.y,
             -self.pos.z
         );
-        let right = self.dir.cross(&self.up);
-        let up = right.cross(&self.dir);
+        let right = na::UnitVector3::new_normalize(self.dir.cross(&self.up));
+        let up = na::UnitVector3::new_normalize(right.cross(&self.dir));
         let basis = na::Matrix4::from_iterator([
             right.x, right.y, right.z, 0.0,
             -up.x, -up.y, -up.z, 0.0,

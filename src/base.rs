@@ -66,6 +66,7 @@ impl Base {
                 //(In practice, the graphics & present queue families are always the same)
                 if let Some((family, _)) = properties.iter().enumerate().find(
                     |(i, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                        && props.queue_flags.contains(vk::QueueFlags::COMPUTE)
                         && surface_loader.get_physical_device_surface_support(*phys_dev, *i as u32, surface).unwrap_or_default()
                 ) {Some((*phys_dev, family as u32))} else {None}
             }) else {

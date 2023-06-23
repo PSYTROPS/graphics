@@ -42,13 +42,16 @@ layout(std140, set=0, binding=4) restrict readonly buffer light_buffer {
 layout(set=0, binding=5) uniform samplerCube cubes[2];
 layout(set=0, binding=6) uniform sampler2D dfgLUT;
 
+// Remapped and clamped roughness
+float alpha(float roughness) {
+	return max(roughness * roughness, 0.001); // 0.001 seems to eliminate specular aliasing
+}
+
 //Distribution term
-float distribution(vec3 l, vec3 v, vec3 n, float roughness) {
-	const vec3 h = normalize(l + v);
-	const float alpha = pow(roughness, 2);
-	const float numer = pow(alpha, 2);
-	const float denom = PI * pow(pow(max(dot(n, h), 0), 2) * (pow(alpha, 2) - 1) + 1, 2);
-	return numer / denom;
+float distribution(float nh, float a) {
+	const float a2 = a * a;
+	const float div = nh * nh * (a2 - 1) + 1;
+	return a2 / (PI * div * div);
 }
 
 //Geometry term
@@ -62,8 +65,8 @@ float geometry(vec3 l, vec3 v, vec3 n, float roughness) {
 }
 
 //Fresnel term
-vec3 fresnel(vec3 l, vec3 n, vec3 f0) {
-	return f0 + (1 - f0) * pow(1 - max(dot(n, l), 0), 5);
+vec3 fresnel(float vh, vec3 f0) {
+	return f0 + (1 - f0) * pow(1 - vh, 5);
 }
 
 vec3 aces_tonemap(vec3 hdr) {
@@ -87,40 +90,48 @@ void main() {
 		sampler2D(textures[material.metal_rough_tex], s),
 		in_texcoords
 	);
-	//Material
 	const float metallic = material.metal * metal_rough_map.b;
 	const float roughness = material.rough * metal_rough_map.g;
-	const vec3 f0 = mix(vec3(0.04), albedo, metallic);
-	//Reflectance equation
+	const float a = alpha(roughness);
+	//Lighting vectors
 	const vec3 cameraPos = camera_pos.xyz;
 	const vec3 v = normalize(cameraPos - in_pos);
 	const vec3 n = in_normal;
-	const float nv = dot(n, v);
-	vec3 outgoing = vec3(0.0);
-	//Diffuse
-	const vec3 diffuse = albedo / PI;
+	const float nv = max(dot(n, v), 0);
+	//Diffuse & specular
+	const vec3 diffColor = (1 - metallic) * albedo;
+	const vec3 f0 = mix(vec3(0.04), albedo, metallic);
 	//IBL
 	const vec2 dfg = textureLod(dfgLUT, vec2(nv, roughness), 0).xy;
 	vec3 multiscatter = 1.0f + f0 * (1.0f / dfg.y - 1.0f);
-	for (uint i = 0; i < 64; ++i) {
+	//Reflectance equation
+	vec3 outgoing = vec3(0.0);
+	for (uint i = 0; i < 1/*64*/; ++i) {
 		//Light
 		const PointLight light = point_lights[i];
 		const vec3 l = normalize(light.pos.xyz - in_pos);
+		const vec3 h = normalize(v + l);
+		const float nh = max(dot(n, h), 0);
+		const float nl = max(dot(n, l), 0);
+		const float vh = max(dot(v, h), 0);
 		const float light_dist = distance(light.pos.xyz, in_pos);
 		const float attenuation = max(min(1 - pow(light_dist / light.range, 4), 1), 0) / pow(light_dist, 2);
 		const vec3 radiance = attenuation * light.intensity * vec3(light.color);
 		//Specular
-		const float d = distribution(l, v, n, roughness);
+		const float d = distribution(nh, a);
 		const float g = geometry(l, v, n, roughness);
-		const vec3 f = fresnel(l, n, f0);
-		const vec3 specular = g * f / (4 * max(dot(n, l), 0) * max(nv, 0) + 0.0001);
+		const vec3 f = fresnel(vh, f0);
+		const vec3 specular = d * g * f / (4 * nl * nv + 0.0001);
+		//Diffuse
+		const vec3 diffuse = diffColor / PI;
 		//BDRF
-		const vec3 reflectance = multiscatter * specular + (1 - metallic) * (1 - f) * diffuse;
-		outgoing += reflectance * radiance * dot(n, l);
+		const vec3 reflectance = multiscatter * specular + (1 - f) * diffuse;
+		// outgoing += reflectance * radiance * nl;
+		outgoing += d;
 	}
 	//IBL
-	const vec3 f = fresnel(v, n, f0);
-	const vec3 ibl_diffuse = (1 - metallic) * albedo * textureLod(cubes[0], n, 0).xyz;
+	const vec3 f = fresnel(nv, f0);
+	const vec3 ibl_diffuse = diffColor * textureLod(cubes[0], n, 0).xyz;
 	const vec3 ibl_specular = textureLod(cubes[1], reflect(-v, n), roughness * 11).xyz * mix(dfg.xxx, dfg.yyy, f0);
 	out_color = vec4(aces_tonemap(outgoing + ibl_specular + (1 - f) * ibl_diffuse), 1.0);
 }

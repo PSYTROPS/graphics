@@ -15,10 +15,9 @@ pub struct Base {
     pub device: ash::Device,
     //Command submission
     pub graphics_queue_family: u32,
+    pub transfer_queue_family: u32,
     pub graphics_queue: vk::Queue,
     pub command_pool: vk::CommandPool,
-    pub transfer_command_buffer: vk::CommandBuffer,
-    pub transfer_fence: vk::Fence,
     pub pipeline_cache: vk::PipelineCache,
 }
 
@@ -60,24 +59,48 @@ impl Base {
             //Physical device
             //TODO: Support a separate transfer queue
             let physical_devices = instance.enumerate_physical_devices()?;
-            let Some((physical_device, graphics_queue_family)) = physical_devices.iter().find_map(|phys_dev| {
-                let properties = instance.get_physical_device_queue_family_properties(*phys_dev);
+            let Some(&physical_device) = physical_devices.iter().find(|&&pd| {
+                let properties = instance.get_physical_device_queue_family_properties(pd);
                 //Find queue family with graphics & presentation support
                 //(In practice, the graphics & present queue families are always the same)
-                if let Some((family, _)) = properties.iter().enumerate().find(
+                if let Some(_) = properties.iter().enumerate().find(
                     |(i, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
                         && props.queue_flags.contains(vk::QueueFlags::COMPUTE)
-                        && surface_loader.get_physical_device_surface_support(*phys_dev, *i as u32, surface).unwrap_or_default()
-                ) {Some((*phys_dev, family as u32))} else {None}
+                        && surface_loader.get_physical_device_surface_support(pd, *i as u32, surface).unwrap_or_default()
+                ) {true} else {false}
             }) else {
                 surface_loader.destroy_surface(surface, None);
                 instance.destroy_instance(None);
                 return Err(vk::Result::ERROR_UNKNOWN);
             };
+            //Queue families
+            let properties = instance.get_physical_device_queue_family_properties(physical_device);
+            let graphics_queue_family = properties.iter().enumerate().position(
+                |(i, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                    && props.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && surface_loader.get_physical_device_surface_support(physical_device, i as u32, surface).unwrap_or_default()
+            ).unwrap() as u32;
+            let transfer_queue_family = if let Some(i) = properties.iter().position(
+                |props| props.queue_flags.contains(vk::QueueFlags::TRANSFER)
+                    && !props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            ) {i as u32} else {graphics_queue_family};
             //Device
-            let queue_create_info = vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(graphics_queue_family)
-                .queue_priorities(&[1.0]);
+            let queue_create_info = if graphics_queue_family != transfer_queue_family {
+                vec![
+                    *vk::DeviceQueueCreateInfo::builder()
+                        .queue_family_index(graphics_queue_family)
+                        .queue_priorities(&[1.0]),
+                    *vk::DeviceQueueCreateInfo::builder()
+                        .queue_family_index(transfer_queue_family)
+                        .queue_priorities(&[1.0])
+                ]
+            } else {
+                vec![
+                    *vk::DeviceQueueCreateInfo::builder()
+                        .queue_family_index(graphics_queue_family)
+                        .queue_priorities(&[1.0])
+                ]
+            };
             let extensions = [
                 khr::Swapchain::name().as_ptr(),
                 vk::KhrShaderDrawParametersFn::name().as_ptr()
@@ -89,9 +112,10 @@ impl Base {
             let mut vk12_features = vk::PhysicalDeviceVulkan12Features::builder()
                 .descriptor_indexing(true)
                 .shader_sampled_image_array_non_uniform_indexing(true)
-                .shader_storage_buffer_array_non_uniform_indexing(true);
+                .shader_storage_buffer_array_non_uniform_indexing(true)
+                .timeline_semaphore(true);
             let create_info = vk::DeviceCreateInfo::builder()
-                .queue_create_infos(std::slice::from_ref(&queue_create_info))
+                .queue_create_infos(&queue_create_info)
                 .enabled_extension_names(&extensions)
                 .enabled_features(&features)
                 .push_next(&mut synchronization2)
@@ -104,16 +128,6 @@ impl Base {
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
                 .queue_family_index(graphics_queue_family);
             let command_pool = device.create_command_pool(&create_info, None)?;
-            //Command buffer (transfer)
-            let create_info = vk::CommandBufferAllocateInfo::builder()
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-            let command_buffers = device.allocate_command_buffers(&create_info)?;
-            let transfer_command_buffer = command_buffers[0];
-            //Fence (transfer)
-            let create_info = vk::FenceCreateInfo::builder();
-            let transfer_fence = device.create_fence(&create_info, None)?;
             //Pipeline cache
             let mut pipeline_cache_path = std::env::current_exe().unwrap();
             pipeline_cache_path.pop();
@@ -135,10 +149,9 @@ impl Base {
                 physical_device,
                 device,
                 graphics_queue_family,
+                transfer_queue_family,
                 graphics_queue,
                 command_pool,
-                transfer_command_buffer,
-                transfer_fence,
                 pipeline_cache
             })
         }
@@ -156,9 +169,7 @@ impl Base {
         let mut size: vk::DeviceSize = 0;
         let mut supported_memory_types = u32::MAX;
         for reqs in requirements {
-            if size % reqs.alignment != 0 {
-                size = (size / reqs.alignment + 1) * reqs.alignment;
-            }
+            size = (size + reqs.alignment - 1) & !(reqs.alignment - 1);
             offsets.push(size);
             size += reqs.size;
             supported_memory_types &= reqs.memory_type_bits;
@@ -238,65 +249,6 @@ impl Base {
             Ok((images, allocation))
         }
     }
-
-    pub fn staged_buffer_write<T>(&self, from: *const T, to: vk::Buffer, count: usize)
-        -> Result<(), vk::Result> {
-        let size = count * std::mem::size_of::<T>();
-        //Create staging buffer
-        let create_info = vk::BufferCreateInfo::builder()
-            .size(size as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let (buffers, allocation) = self.create_buffers(
-            std::slice::from_ref(&create_info),
-            vk::MemoryPropertyFlags::HOST_VISIBLE
-        )?;
-        let staging = buffers[0];
-        //Write to staging buffer
-        unsafe {
-            let data = self.device.map_memory(allocation, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
-            from.copy_to_nonoverlapping(data as *mut T, count);
-            let memory_range = vk::MappedMemoryRange::builder()
-                .memory(allocation)
-                .offset(0)
-                .size(vk::WHOLE_SIZE);
-            self.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
-            self.device.unmap_memory(allocation);
-            //Record commands
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            self.device.begin_command_buffer(self.transfer_command_buffer, &begin_info)?;
-            let region = vk::BufferCopy::builder()
-                .src_offset(0)
-                .dst_offset(0)
-                .size(size as u64);
-            self.device.cmd_copy_buffer(
-                self.transfer_command_buffer,
-                staging,
-                to,
-                std::slice::from_ref(&region)
-            );
-            self.device.end_command_buffer(self.transfer_command_buffer)?;
-            //Submit to queue
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(std::slice::from_ref(&self.transfer_command_buffer));
-            self.device.queue_submit(
-                self.graphics_queue,
-                std::slice::from_ref(&submit_info),
-                self.transfer_fence
-            )?;
-            //Destroy staging buffer
-            self.device.wait_for_fences(
-                std::slice::from_ref(&self.transfer_fence),
-                false,
-                1_000_000_000, //1 second
-            )?;
-            self.device.reset_fences(std::slice::from_ref(&self.transfer_fence))?;
-            self.device.destroy_buffer(staging, None);
-            self.device.free_memory(allocation, None);
-        }
-        Ok(())
-    }
 }
 
 impl Drop for Base {
@@ -312,8 +264,6 @@ impl Drop for Base {
             //Destroy Vulkan objects
             self.device.device_wait_idle().unwrap();
             self.device.destroy_pipeline_cache(self.pipeline_cache, None);
-            self.device.destroy_fence(self.transfer_fence, None);
-            self.device.free_command_buffers(self.command_pool, &[self.transfer_command_buffer]);
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);

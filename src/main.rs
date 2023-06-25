@@ -26,14 +26,15 @@ fn main() {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.push("assets");
+    //path.push("Cube.gltf");
+    //path.push("MetalRoughSpheres.glb");
     path.push("bottle.glb");
-    //path.push("mrspheres.glb");
     let mut scene = Scene::load_gltf(path).unwrap();
     scene.lights = vec![
         graphics::scene::PointLight {
             pos: [2.0, 2.0, 0.0, 1.0],
             color: [1.0, 1.0, 1.0, 1.0],
-            intensity: 16.0,
+            intensity: 0.0,
             range: 64.0
         },
     ];

@@ -7,11 +7,14 @@ use swapchain::Swapchain;
 use camera::Camera;
 use device_scene::DeviceScene;
 use environment::Environment;
+use transfer::Transfer;
+use transfer::transaction::Transaction;
 
 use std::rc::Rc;
 
 pub mod scene;
 mod base;
+mod transfer;
 mod framebuffer;
 mod swapchain;
 mod camera;
@@ -28,6 +31,8 @@ pub const MAX_TEXTURES: u32 = 64;
 
 pub struct Renderer {
     base: Rc<Base>,
+    transfer: Transfer,
+    transaction: Transaction,
     framebuffer: Framebuffer,
     swapchain: Swapchain,
     //Scene data
@@ -46,6 +51,11 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(window: &sdl2::video::Window) -> Result<Self, vk::Result> {
         let base = Rc::new(Base::new(window)?);
+        let transfer = Transfer::new(base.clone())?;
+        let mut transaction = Transaction::new(
+            base.transfer_queue_family,
+            base.graphics_queue_family
+        );
         let extent = vk::Extent2D {
             width: 1024,
             height: 1024
@@ -55,6 +65,7 @@ impl Renderer {
         let camera = Camera::new();
         let environment = Environment::new(
             base.clone(),
+            &mut transaction,
             include_bytes!("../assets/specular.ktx2"),
             include_bytes!("../assets/diffuse.ktx2"),
             include_bytes!("../assets/specular.ktx2")
@@ -117,7 +128,7 @@ impl Renderer {
             std::slice::from_ref(&create_info),
             vk::MemoryPropertyFlags::HOST_VISIBLE
         )?;
-        base.staged_buffer_write(skybox_vertices.as_ptr(), vertex_buffers[0], skybox_vertices.len())?;
+        transaction.buffer_write(&skybox_vertices, vertex_buffers[0], 0);
         //DFG lookup texture
         let dfg_lookup_bytes = include_bytes!("../assets/dfg_lut.bin");
         let extent = vk::Extent3D::builder().width(256).height(256).depth(1);
@@ -136,107 +147,30 @@ impl Renderer {
             std::slice::from_ref(&create_info),
             vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
-        let create_info = vk::BufferCreateInfo::builder()
-			.size(dfg_lookup_bytes.len() as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let (staging, staging_alloc) = base.create_buffers(
-            std::slice::from_ref(&create_info),
-            vk::MemoryPropertyFlags::HOST_VISIBLE
-        )?;
-		unsafe {
-			//Write to staging buffer
-            let data = base.device.map_memory(staging_alloc, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
-			dfg_lookup_bytes.as_ptr().copy_to_nonoverlapping(
-                data as *mut u8, dfg_lookup_bytes.len()
-            );
-            let memory_range = vk::MappedMemoryRange::builder()
-                .memory(staging_alloc)
-                .offset(0)
-                .size(vk::WHOLE_SIZE);
-            base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
-            base.device.unmap_memory(staging_alloc);
-			//Record command buffer
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            base.device.begin_command_buffer(base.transfer_command_buffer, &begin_info)?;
-			//Pipeline barrier
-            let subresource_range = vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1);
-            let barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(base.graphics_queue_family)
-                .dst_queue_family_index(base.graphics_queue_family)
-                .image(lut_images[0])
-                .subresource_range(*subresource_range);
-            let dependency = vk::DependencyInfo::builder()
-                .image_memory_barriers(std::slice::from_ref(&barrier));
-            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
-			//Copy buffer to images
-            let subresource = vk::ImageSubresourceLayers::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .mip_level(0)
-                .base_array_layer(0)
-                .layer_count(1);
-            let region = vk::BufferImageCopy2::builder()
-                .buffer_offset(0)
-                .image_subresource(*subresource)
-                .image_offset(vk::Offset3D::default())
-                .image_extent(*extent);
-            let copy = vk::CopyBufferToImageInfo2::builder()
-                .src_buffer(staging[0])
-                .dst_image(lut_images[0])
-                .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .regions(std::slice::from_ref(&region));
-            base.device.cmd_copy_buffer_to_image2(base.transfer_command_buffer, &copy);
-            //Barrier
-            let subresource_range = vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1);
-            let barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(base.graphics_queue_family)
-                .dst_queue_family_index(base.graphics_queue_family)
-                .image(lut_images[0])
-                .subresource_range(*subresource_range);
-            let dependency = vk::DependencyInfo::builder()
-                .image_memory_barriers(std::slice::from_ref(&barrier));
-            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
-            base.device.end_command_buffer(base.transfer_command_buffer)?;
-			//Submit command buffer to queue
-			let submit_info = vk::SubmitInfo::builder()
-				.command_buffers(std::slice::from_ref(&base.transfer_command_buffer));
-            base.device.queue_submit(
-                base.graphics_queue,
-                std::slice::from_ref(&submit_info),
-                base.transfer_fence
-            )?;
-            base.device.wait_for_fences(
-                std::slice::from_ref(&base.transfer_fence),
-                false,
-                1_000_000_000,
-            )?;
-            base.device.reset_fences(std::slice::from_ref(&base.transfer_fence))?;
-            base.device.destroy_buffer(staging[0], None);
-            base.device.free_memory(staging_alloc, None);
-		}
+        //Write to DFG lookup texture
+        let subresource_range = vk::ImageSubresourceRange::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(1)
+            .base_array_layer(0)
+            .layer_count(1);
+        let subresource = vk::ImageSubresourceLayers::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .mip_level(0)
+            .base_array_layer(0)
+            .layer_count(1);
+        let region = vk::BufferImageCopy2::builder()
+            .buffer_offset(0)
+            .image_subresource(*subresource)
+            .image_offset(vk::Offset3D::default())
+            .image_extent(*extent);
+        transaction.image_write(
+            dfg_lookup_bytes,
+            lut_images[0],
+            *subresource_range, 
+            std::slice::from_ref(&region),
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
         //DGF lookup image view
         let component_mapping = vk::ComponentMapping::builder()
             .r(vk::ComponentSwizzle::IDENTITY)
@@ -286,6 +220,8 @@ impl Renderer {
         }
         Ok(Renderer {
             base,
+            transfer,
+            transaction,
             framebuffer,
             swapchain,
             camera,
@@ -302,7 +238,7 @@ impl Renderer {
     }
 
     pub fn load_scene(&mut self, scene: &scene::Scene) -> Result<(), vk::Result> {
-        let dev_scene = DeviceScene::new(self.base.clone(), &scene, self.framebuffer.frames.len())?;
+        let dev_scene = DeviceScene::new(self.base.clone(), &mut self.transaction, &scene, self.framebuffer.frames.len())?;
         //Update descriptor sets
         let mut writes = Vec::<vk::WriteDescriptorSet>::new();
         let mut image_infos: Vec<_> = dev_scene.textures.image_views.iter().map(
@@ -366,17 +302,6 @@ impl Renderer {
         Ok(())
     }
 
-	/*
-    pub fn update_scene(&mut self, scene: &scene::Scene) {
-        if let Some(dev_scene) = &mut self.scene {
-            for (i, node) in scene.nodes.iter().enumerate() {
-                let transform = node.matrix().to_homogeneous();
-                dev_scene.transform_matrices[i] = transform;
-            }
-        }
-    }
-    */
-
     /**
         Draw bound scenes.
         The instructions proceed as follows:
@@ -389,6 +314,8 @@ impl Renderer {
     */
     pub fn draw(&mut self) -> Result<(), vk::Result> {
         let frame = &self.framebuffer.frames[self.current_frame as usize];
+        //Transfer operations
+        self.transfer.submit(&self.transaction)?;
         unsafe {
             //Acquire swapchain image
             let mut swapchain_index = 0;
@@ -421,6 +348,12 @@ impl Renderer {
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.base.device.begin_command_buffer(frame.command_buffer, &begin_info)?;
+            //Transfer barriers
+            if self.transaction.end_image_barriers.len() > 0 {
+                let dependency = vk::DependencyInfo::builder()
+                    .image_memory_barriers(&self.transaction.end_image_barriers);
+                self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
+            }
             //Push constants
             let mut push_constants: [f32; 36] = [0.0; 36];
             push_constants[0..16].copy_from_slice(self.camera.view().as_slice());
@@ -660,16 +593,21 @@ impl Renderer {
             self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             self.base.device.end_command_buffer(frame.command_buffer)?;
             //Submit to queue
-            let wait_semaphore_info = vk::SemaphoreSubmitInfo::builder()
-                .semaphore(frame.semaphores[0])
-                .stage_mask(vk::PipelineStageFlags2::BLIT);
+            let wait_semaphore_infos = [
+                *vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(frame.semaphores[0])
+                    .stage_mask(vk::PipelineStageFlags2::BLIT),
+                *vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(self.transfer.semaphore)
+                    .stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            ];
             let command_buffer_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(frame.command_buffer);
             let signal_semaphore_info = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(frame.semaphores[1])
                 .stage_mask(vk::PipelineStageFlags2::BLIT);
             let submit_info = vk::SubmitInfo2::builder()
-                .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_info))
+                .wait_semaphore_infos(&wait_semaphore_infos)
                 .command_buffer_infos(std::slice::from_ref(&command_buffer_info))
                 .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_info));
             self.base.device.queue_submit2(
@@ -685,6 +623,7 @@ impl Renderer {
             self.swapchain.loader.queue_present(self.base.graphics_queue, &present_info)?;
         }
         self.current_frame = (self.current_frame + 1) % self.framebuffer.frames.len() as u32;
+        self.transaction.clear();
         Ok(())
     }
 }

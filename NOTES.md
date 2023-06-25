@@ -26,3 +26,26 @@
     * Irradiance map
     * Pre-filtered environment map
 3. BRDF integration map
+
+# Renderer interface example usage
+```
+//Scenes
+let camera = Camera::new
+let scene = Scene::new
+let dev_scene = DeviceScene::(&renderer, &scene);
+let dev_scenes = [...]
+//Environment
+let environment = Environment::new(skybox, [probes...]);
+//Lights
+let lights = [...]
+//Draw
+dev_scene.update(scene);
+light.update(...);
+let scene_manifest = {
+	pbr: [...],
+	clear_coat: [...],
+	..Manifest::default()
+};
+renderer.set_resolution(...)
+renderer.draw(camera, scene_manifest, lights, environment);
+```

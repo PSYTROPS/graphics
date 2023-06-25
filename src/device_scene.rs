@@ -3,6 +3,7 @@ use nalgebra as na;
 use super::base::Base;
 use super::scene::{Vertex, Material, Scene, PointLight};
 use super::textures::Textures;
+use super::transfer::transaction::Transaction;
 use std::rc::Rc;
 
 pub struct DeviceScene {
@@ -25,7 +26,12 @@ pub struct DeviceScene {
 }
 
 impl DeviceScene {
-    pub fn new(base: Rc<Base>, scene: &Scene, frame_count: usize) -> Result<Self, vk::Result> {
+    pub fn new(
+        base: Rc<Base>,
+        transaction: &mut Transaction,
+        scene: &Scene,
+        frame_count: usize
+    ) -> Result<Self, vk::Result> {
         //Concatenate meshes
         let mut vertices = Vec::<Vertex>::new();
         let mut indices = Vec::<u16>::new();
@@ -94,11 +100,11 @@ impl DeviceScene {
             vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
         //Write to buffers
-        base.staged_buffer_write(vertices.as_ptr(), buffers[0], vertices.len())?;
-        base.staged_buffer_write(indices.as_ptr(), buffers[1], indices.len())?;
-        base.staged_buffer_write(scene.materials.as_ptr(), buffers[3], scene.materials.len())?;
-        base.staged_buffer_write(scene.lights.as_ptr(), buffers[4], scene.lights.len())?;
-        base.staged_buffer_write(draw_commands.as_ptr(), buffers[5], draw_commands.len())?;
+        transaction.buffer_write(&vertices, buffers[0], 0);
+        transaction.buffer_write(&indices, buffers[1], 0);
+        transaction.buffer_write(&scene.materials, buffers[3], 0);
+        transaction.buffer_write(&scene.lights, buffers[4], 0);
+        transaction.buffer_write(&draw_commands, buffers[5], 0);
         //Create staging buffer
         let create_info = vk::BufferCreateInfo::builder()
             .size(frame_count as u64 * transforms_size as u64)
@@ -125,7 +131,7 @@ impl DeviceScene {
             base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
             base.device.unmap_memory(host_allocation);
         }
-        let textures = Textures::new(base.clone(), &scene.textures)?;
+        let textures = Textures::new(base.clone(), transaction, &scene.textures)?;
         //Result
         Ok(Self {
             base,

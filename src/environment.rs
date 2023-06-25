@@ -1,6 +1,7 @@
 use ash::vk::{self, BufferImageCopy2};
 use ktx2::Reader;
 use super::base::Base;
+use super::transfer::transaction::Transaction;
 use std::rc::Rc;
 
 pub struct Environment {
@@ -12,24 +13,19 @@ pub struct Environment {
 }
 
 impl Environment {
-	pub fn new(base: Rc<Base>, skybox: &[u8], diffuse: &[u8], specular: &[u8])
-		-> Result<Environment, vk::Result> {
+	pub fn new(
+        base: Rc<Base>, 
+        transaction: &mut Transaction,
+        skybox: &[u8],
+        diffuse: &[u8],
+        specular: &[u8]
+        ) -> Result<Environment, vk::Result> {
 		//Read files to buffer
 		let files = [skybox, diffuse, specular];
-		let mut texels = Vec::<u8>::new();
-		let mut offsets = Vec::<usize>::new(); //Offsets per mip level
-		let headers = files.map(|file| {
-			let reader = Reader::new(file).unwrap();
-			let header = reader.header();
-			for level in reader.levels() {
-				offsets.push(texels.len());
-				texels.extend_from_slice(level);
-			}
-			header
-		});
+		let readers = files.map(|file| Reader::new(file).unwrap());
 		//Create images
 		let create_infos = [0, 1, 2].map(|i| {
-			let header = headers[i];
+			let header = readers[i].header();
             let extent = vk::Extent3D::builder()
                 .width(header.pixel_width)
                 .height(header.pixel_height)
@@ -51,129 +47,53 @@ impl Environment {
             &create_infos,
             vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
-		//Create staging buffer
-        let create_info = vk::BufferCreateInfo::builder()
-			.size(texels.len() as u64)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let (staging, staging_alloc) = base.create_buffers(
-            std::slice::from_ref(&create_info),
-            vk::MemoryPropertyFlags::HOST_VISIBLE
-        )?;
-		unsafe {
-			//Write to staging buffer
-            let data = base.device.map_memory(staging_alloc, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())?;
-			texels.as_ptr().copy_to_nonoverlapping(data as *mut u8, texels.len());
-            let memory_range = vk::MappedMemoryRange::builder()
-                .memory(staging_alloc)
-                .offset(0)
-                .size(vk::WHOLE_SIZE);
-            base.device.flush_mapped_memory_ranges(std::slice::from_ref(&memory_range))?;
-            base.device.unmap_memory(staging_alloc);
-			//Record command buffer
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            base.device.begin_command_buffer(base.transfer_command_buffer, &begin_info)?;
-			//Pipeline barrier
-			let image_barriers = [0, 1, 2].map(|i| {
-				let header = headers[i];
-                let subresource_range = vk::ImageSubresourceRange::builder()
+        //Write to images
+        for i in 0..3 {
+            //Read image
+            let reader = &readers[i];
+            let header = reader.header();
+            let mut texels = Vec::<u8>::new();
+            let mut offsets = Vec::<usize>::new();
+            for level in reader.levels() {
+                offsets.push(texels.len());
+                texels.extend_from_slice(level);
+            }
+            //Write
+            let subresource_range = vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(header.level_count)
+                .base_array_layer(0)
+                .layer_count(6);
+            //Regions
+            let regions: Vec::<BufferImageCopy2> = (0..header.level_count).map(|level| {
+                let subresource = vk::ImageSubresourceLayers::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(header.level_count)
+                    .mip_level(level)
                     .base_array_layer(0)
                     .layer_count(6);
-                *vk::ImageMemoryBarrier2::builder()
-                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                    .src_access_mask(vk::AccessFlags2::NONE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                    .old_layout(vk::ImageLayout::UNDEFINED)
-                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .src_queue_family_index(base.graphics_queue_family)
-                    .dst_queue_family_index(base.graphics_queue_family)
-                    .image(images[i])
-                    .subresource_range(*subresource_range)
-			});
-            let dependency = vk::DependencyInfo::builder()
-                .image_memory_barriers(&image_barriers);
-            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
-			//Copy buffer to images
-			let mut total_mip_levels = 0;
-			for i in 0..3 {
-				let header = headers[i];
-				let regions: Vec::<BufferImageCopy2> = (0..header.level_count).map(|level| {
-					let subresource = vk::ImageSubresourceLayers::builder()
-						.aspect_mask(vk::ImageAspectFlags::COLOR)
-						.mip_level(level)
-						.base_array_layer(0)
-						.layer_count(6);
-					let extent = vk::Extent3D::builder()
-						.width(header.pixel_width >> level)
-						.height(header.pixel_height >> level)
-						.depth(1);
-					*vk::BufferImageCopy2::builder()
-						.buffer_offset(offsets[
-							total_mip_levels
-							+ level as usize
-						] as u64)
-						.image_subresource(*subresource)
-						.image_offset(vk::Offset3D::default())
-						.image_extent(*extent)
-				}).collect();
-				total_mip_levels += header.level_count as usize;
-                let copy = vk::CopyBufferToImageInfo2::builder()
-                    .src_buffer(staging[0])
-                    .dst_image(images[i])
-                    .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .regions(&regions);
-                base.device.cmd_copy_buffer_to_image2(base.transfer_command_buffer, &copy);
-			}
-			//Pipeline barrier
-			let image_barriers = [0, 1, 2].map(|i| {
-				let header = headers[i];
-                let subresource_range = vk::ImageSubresourceRange::builder()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(header.level_count)
-                    .base_array_layer(0)
-                    .layer_count(6);
-                *vk::ImageMemoryBarrier2::builder()
-                    .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
-                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .src_queue_family_index(base.graphics_queue_family)
-                    .dst_queue_family_index(base.graphics_queue_family)
-                    .image(images[i])
-                    .subresource_range(*subresource_range)
-			});
-            let dependency = vk::DependencyInfo::builder()
-                .image_memory_barriers(&image_barriers);
-            base.device.cmd_pipeline_barrier2(base.transfer_command_buffer, &dependency);
-            base.device.end_command_buffer(base.transfer_command_buffer)?;
-			//Submit command buffer to queue
-			let submit_info = vk::SubmitInfo::builder()
-				.command_buffers(std::slice::from_ref(&base.transfer_command_buffer));
-            base.device.queue_submit(
-                base.graphics_queue,
-                std::slice::from_ref(&submit_info),
-                base.transfer_fence
-            )?;
-            base.device.wait_for_fences(
-                std::slice::from_ref(&base.transfer_fence),
-                false,
-                1_000_000_000,
-            )?;
-            base.device.reset_fences(std::slice::from_ref(&base.transfer_fence))?;
-            base.device.destroy_buffer(staging[0], None);
-            base.device.free_memory(staging_alloc, None);
-		}
+                let extent = vk::Extent3D::builder()
+                    .width(header.pixel_width >> level)
+                    .height(header.pixel_height >> level)
+                    .depth(1);
+                *vk::BufferImageCopy2::builder()
+                    .buffer_offset(offsets[level as usize] as u64)
+                    .image_subresource(*subresource)
+                    .image_offset(vk::Offset3D::default())
+                    .image_extent(*extent)
+            }).collect();
+            //Layout
+            transaction.image_write(
+                &texels,
+                images[i],
+                *subresource_range,
+                &regions,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            );
+        }
 		//Create image views
 		let image_views = [0, 1, 2].map(|i| {
-			let header = headers[i];
+			let header = readers[i].header();
             let component_mapping = vk::ComponentMapping::builder()
                 .r(vk::ComponentSwizzle::IDENTITY)
                 .g(vk::ComponentSwizzle::IDENTITY)

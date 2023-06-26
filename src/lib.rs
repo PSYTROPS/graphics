@@ -23,10 +23,11 @@ mod textures;
 mod environment;
 mod pipeline;
 
+pub const FRAME_COUNT: usize = 2;
 pub const COLOR_FORMAT: vk::Format = vk::Format::B8G8R8A8_SRGB;
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 pub const SAMPLE_COUNT: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_4;
-pub const MAX_TEXTURES: u32 = 64;
+pub const MAX_TEXTURES: usize = 64;
 //pub const MAX_LIGHTS: u32 = 64;
 
 pub struct Renderer {
@@ -60,7 +61,7 @@ impl Renderer {
             width: 1024,
             height: 1024
         };
-        let framebuffer = Framebuffer::new(base.clone(), extent, 2)?;
+        let framebuffer = Framebuffer::new(base.clone(), extent)?;
         let swapchain = Swapchain::new(&base, None)?;
         let camera = Camera::new();
         let environment = Environment::new(
@@ -305,8 +306,9 @@ impl Renderer {
     /**
         Draw bound scenes.
         The instructions proceed as follows:
-        1. Acquire swapchain image
-        2. Record graphics command buffer
+        1. Execute transfers
+        2. Acquire swapchain image
+        3. Record graphics command buffer
             1. Write push constants
             2. Update scene data
             3. Draw scenes
@@ -315,7 +317,10 @@ impl Renderer {
     pub fn draw(&mut self) -> Result<(), vk::Result> {
         let frame = &self.framebuffer.frames[self.current_frame as usize];
         //Transfer operations
-        self.transfer.submit(&self.transaction)?;
+        let (transfer_semaphore, transfer_semaphore_value) = self.transfer.submit(
+            &self.transaction,
+            self.current_frame as usize
+        )?;
         unsafe {
             //Acquire swapchain image
             let mut swapchain_index = 0;
@@ -598,7 +603,8 @@ impl Renderer {
                     .semaphore(frame.semaphores[0])
                     .stage_mask(vk::PipelineStageFlags2::BLIT),
                 *vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(self.transfer.semaphore)
+                    .semaphore(transfer_semaphore)
+                    .value(transfer_semaphore_value)
                     .stage_mask(vk::PipelineStageFlags2::TRANSFER)
             ];
             let command_buffer_info = vk::CommandBufferSubmitInfo::builder()

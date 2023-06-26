@@ -1,5 +1,6 @@
 use ash::vk;
 use ash::extensions::khr;
+use crate::FRAME_COUNT;
 use crate::base::Base;
 
 pub struct Swapchain {
@@ -26,7 +27,7 @@ impl Swapchain {
         };
         let create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(base.surface)
-            .min_image_count(3) //TODO: Image count determination
+            .min_image_count((FRAME_COUNT as u32).max(surface_capabilities.min_image_count))
             .image_format(vk::Format::B8G8R8A8_SRGB)
             .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
             .image_extent(extent)

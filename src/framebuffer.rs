@@ -1,5 +1,5 @@
 use ash::vk;
-use crate::{COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT, MAX_TEXTURES};
+use crate::{FRAME_COUNT, COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT, MAX_TEXTURES};
 use super::base::Base;
 use super::pipeline;
 use std::rc::Rc;
@@ -11,7 +11,7 @@ pub struct Framebuffer {
     pub pipelines: [pipeline::Pipeline; 2],
     pub descriptor_pool: vk::DescriptorPool,
     pub image_allocation: vk::DeviceMemory,
-    pub frames: Vec<Frame>
+    pub frames: [Frame; FRAME_COUNT]
 }
 
 ///Container for data needed to independently render a frame.
@@ -63,8 +63,7 @@ impl Drop for Frame {
 impl Framebuffer {
     pub fn new(
         base: Rc<Base>,
-        extent: vk::Extent2D,
-        frame_count: u32
+        extent: vk::Extent2D
     ) -> Result<Self, vk::Result> {
         //Render pass
         let attachments = [
@@ -133,25 +132,25 @@ impl Framebuffer {
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(3 * frame_count),
+                .descriptor_count(3 * FRAME_COUNT as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLER)
-                .descriptor_count(frame_count),
+                .descriptor_count(FRAME_COUNT as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(frame_count * MAX_TEXTURES),
+                .descriptor_count((FRAME_COUNT * MAX_TEXTURES) as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(4 * frame_count)
+                .descriptor_count(4 * FRAME_COUNT as u32)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets(2 * frame_count)
+            .max_sets(2 * FRAME_COUNT as u32)
             .pool_sizes(&pool_sizes);
         let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
         //Descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> =
-            std::iter::repeat(pipelines[0].descriptor_set_layout).take(frame_count as usize)
-            .chain(std::iter::repeat(pipelines[1].descriptor_set_layout).take(frame_count as usize))
+            std::iter::repeat(pipelines[0].descriptor_set_layout).take(FRAME_COUNT)
+            .chain(std::iter::repeat(pipelines[1].descriptor_set_layout).take(FRAME_COUNT))
             .collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
@@ -199,7 +198,7 @@ impl Framebuffer {
                 .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .initial_layout(vk::ImageLayout::UNDEFINED)
-        ].into_iter().cycle().take(3 * frame_count as usize).collect();
+        ].into_iter().cycle().take(3 * FRAME_COUNT).collect();
         let (images, image_allocation) = base.create_images(
             &create_infos, vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
@@ -208,11 +207,10 @@ impl Framebuffer {
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(base.command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(frame_count);
+            .command_buffer_count(FRAME_COUNT as u32);
         let command_buffers = unsafe {base.device.allocate_command_buffers(&alloc_info)}?;
         //Frames
-        let mut frames = Vec::<Frame>::new();
-        for i in 0..frame_count {
+        let frames = [0, 1].map(|i| {
             //Images
             let chunk = image_chunks.next().unwrap();
             let images = [chunk[0], chunk[1], chunk[2]];
@@ -269,7 +267,9 @@ impl Framebuffer {
                 .width(extent.width)
                 .height(extent.height)
                 .layers(1);
-            let framebuffer = unsafe {base.device.create_framebuffer(&create_info, None)}?;
+            let framebuffer = unsafe {
+                base.device.create_framebuffer(&create_info, None)
+            }.unwrap();
             //Command buffer
             let command_buffer = command_buffers[i as usize];
             //Semaphores
@@ -280,18 +280,20 @@ impl Framebuffer {
             //Fence
             let create_info = vk::FenceCreateInfo::builder()
                 .flags(vk::FenceCreateFlags::SIGNALED);
-            let fence = unsafe {base.device.create_fence(&create_info, None)}?;
-            frames.push(Frame {
+            let fence = unsafe {
+                base.device.create_fence(&create_info, None)
+            }.unwrap();
+            Frame {
                 base,
                 images,
                 image_views,
                 framebuffer,
                 command_buffer,
-                descriptor_set: [descriptor_sets[i as usize], descriptor_sets[(i + frame_count) as usize]],
+                descriptor_set: [descriptor_sets[i as usize], descriptor_sets[(i + FRAME_COUNT) as usize]],
                 semaphores,
                 fence
-            });
-        }
+            }
+        });
         Ok(Self {
             base,
             extent,

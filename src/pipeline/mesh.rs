@@ -47,7 +47,7 @@ pub fn new(
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(3)
             .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(MAX_TEXTURES)
+            .descriptor_count(MAX_TEXTURES as u32)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         //Lights
         *vk::DescriptorSetLayoutBinding::builder()

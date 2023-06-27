@@ -2,14 +2,10 @@ use ash::vk;
 use crate::base::Base;
 use crate::{SAMPLE_COUNT, MAX_TEXTURES};
 use crate::scene::Vertex;
-use super::Pipeline;
+use super::PipelineLayout;
 use std::rc::Rc;
 
-pub fn new(
-    base: Rc<Base>,
-    extent: vk::Extent2D,
-    render_pass: vk::RenderPass
-) -> Result<Pipeline, vk::Result> {
+pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
     //Sampler
     let create_info = vk::SamplerCreateInfo::builder()
         .mag_filter(vk::Filter::LINEAR)
@@ -84,6 +80,21 @@ pub fn new(
     let pipeline_layout = unsafe {
         base.device.create_pipeline_layout(&create_info, None)?
     };
+    Ok(PipelineLayout {
+        base,
+        samplers: vec![sampler],
+        descriptor_set_layout,
+        pipeline_layout,
+        create_pipeline: create_pipeline
+    })
+}
+
+fn create_pipeline(
+    layout: &PipelineLayout,
+    extent: vk::Extent2D,
+    render_pass: vk::RenderPass
+) -> Result<vk::Pipeline, vk::Result> {
+    let base = &layout.base;
     //Pipeline
     //Shaders
     let code = ash::util::read_spv(
@@ -204,7 +215,7 @@ pub fn new(
             .multisample_state(&multisample)
             .depth_stencil_state(&depth_stencil)
             .color_blend_state(&color_blend)
-            .layout(pipeline_layout)
+            .layout(layout.pipeline_layout)
             .render_pass(render_pass)
             .subpass(0)
     ];
@@ -221,11 +232,5 @@ pub fn new(
         base.device.destroy_shader_module(vertex_shader, None);
         base.device.destroy_shader_module(fragment_shader, None);
     }
-    Ok(Pipeline {
-        base,
-        samplers: vec![sampler],
-        descriptor_set_layout,
-        pipeline_layout,
-        pipeline: pipelines[0]
-    })
+    Ok(pipelines[0])
 }

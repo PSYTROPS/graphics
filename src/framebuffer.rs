@@ -1,14 +1,14 @@
 use ash::vk;
 use crate::{FRAME_COUNT, COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT, MAX_TEXTURES};
 use super::base::Base;
-use super::pipeline;
+use super::pipeline::PipelineLayout;
 use std::rc::Rc;
 
 pub struct Framebuffer {
     base: Rc<Base>,
     pub extent: vk::Extent2D,
     pub render_pass: vk::RenderPass,
-    pub pipelines: [pipeline::Pipeline; 2],
+    pub pipelines: Vec<vk::Pipeline>,
     pub descriptor_pool: vk::DescriptorPool,
     pub image_allocation: vk::DeviceMemory,
     pub frames: [Frame; FRAME_COUNT]
@@ -63,7 +63,8 @@ impl Drop for Frame {
 impl Framebuffer {
     pub fn new(
         base: Rc<Base>,
-        extent: vk::Extent2D
+        extent: vk::Extent2D,
+        pipeline_layouts: &[PipelineLayout]
     ) -> Result<Self, vk::Result> {
         //Render pass
         let attachments = [
@@ -124,10 +125,9 @@ impl Framebuffer {
             base.device.create_render_pass(&create_info, None)?
         };
         //Pipelines
-        let pipelines = [
-            pipeline::mesh::new(base.clone(), extent, render_pass)?,
-            pipeline::skybox::new(base.clone(), extent, render_pass)?
-        ];
+        let pipelines: Vec<vk::Pipeline> = pipeline_layouts.iter().map(
+            |layout| (layout.create_pipeline)(&layout, extent, render_pass).unwrap()
+        ).collect();
         //Descriptor pool
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
@@ -149,9 +149,9 @@ impl Framebuffer {
         let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
         //Descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> =
-            std::iter::repeat(pipelines[0].descriptor_set_layout).take(FRAME_COUNT)
-            .chain(std::iter::repeat(pipelines[1].descriptor_set_layout).take(FRAME_COUNT))
-            .collect();
+            pipeline_layouts.iter().map(
+                |layout| std::iter::repeat(layout.descriptor_set_layout).take(FRAME_COUNT)
+            ).flatten().collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&layouts);
@@ -311,6 +311,9 @@ impl Drop for Framebuffer {
         unsafe {
             self.base.device.destroy_render_pass(self.render_pass, None);
             self.base.device.destroy_descriptor_pool(self.descriptor_pool, None);
+            for pipeline in &self.pipelines {
+                self.base.device.destroy_pipeline(*pipeline, None);
+            }
             self.base.device.free_memory(self.image_allocation, None);
         }
     }

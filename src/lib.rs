@@ -9,6 +9,7 @@ use device_scene::DeviceScene;
 use environment::Environment;
 use transfer::Transfer;
 use transfer::transaction::Transaction;
+use pipeline::PipelineLayout;
 
 use std::rc::Rc;
 
@@ -35,6 +36,7 @@ pub struct Renderer {
     transfer: Transfer,
     transaction: Transaction,
     framebuffer: Framebuffer,
+    layouts: [PipelineLayout; 2],
     swapchain: Swapchain,
     //Scene data
     pub camera: Camera,
@@ -61,7 +63,11 @@ impl Renderer {
             width: 1024,
             height: 1024
         };
-        let framebuffer = Framebuffer::new(base.clone(), extent)?;
+        let layouts = [
+            pipeline::mesh::create_layout(base.clone())?,
+            pipeline::skybox::create_layout(base.clone())?,
+        ];
+        let framebuffer = Framebuffer::new(base.clone(), extent, &layouts)?;
         let swapchain = Swapchain::new(&base, None)?;
         let camera = Camera::new();
         let environment = Environment::new(
@@ -223,6 +229,7 @@ impl Renderer {
             base,
             transfer,
             transaction,
+            layouts,
             framebuffer,
             swapchain,
             camera,
@@ -369,7 +376,7 @@ impl Renderer {
             push_constants[35] = 0.0;
             self.base.device.cmd_push_constants(
                 frame.command_buffer,
-                self.framebuffer.pipelines[0].pipeline_layout,
+                self.layouts[0].pipeline_layout,
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
                 std::slice::from_raw_parts(
@@ -460,13 +467,13 @@ impl Renderer {
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.framebuffer.pipelines[0].pipeline
+                self.framebuffer.pipelines[0]
             );
             //TODO: Per-scene descriptor sets
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.framebuffer.pipelines[0].pipeline_layout,
+                self.layouts[0].pipeline_layout,
                 0,
                 std::slice::from_ref(&frame.descriptor_set[0]),
                 &[]
@@ -497,12 +504,12 @@ impl Renderer {
             self.base.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.framebuffer.pipelines[1].pipeline
+                self.framebuffer.pipelines[1]
             );
             self.base.device.cmd_bind_descriptor_sets(
                 frame.command_buffer,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.framebuffer.pipelines[1].pipeline_layout,
+                self.layouts[1].pipeline_layout,
                 0,
                 std::slice::from_ref(&frame.descriptor_set[1]),
                 &[]

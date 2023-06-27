@@ -48,7 +48,7 @@ pub struct Renderer {
     dfg_lookup_view: vk::ImageView,
     dfg_lookup_sampler: vk::Sampler,
     dfg_lookup_alloc: vk::DeviceMemory,
-    current_frame: u32
+    current_frame: usize
 }
 
 impl Renderer {
@@ -322,11 +322,11 @@ impl Renderer {
             4. Blit drawn image to swapchain image
     */
     pub fn draw(&mut self) -> Result<(), vk::Result> {
-        let frame = &self.framebuffer.frames[self.current_frame as usize];
+        let frame = &self.framebuffer.frames[self.current_frame];
         //Transfer operations
         let (transfer_semaphore, transfer_semaphore_value) = self.transfer.submit(
             &self.transaction,
-            self.current_frame as usize
+            self.current_frame
         )?;
         unsafe {
             //Acquire swapchain image
@@ -387,7 +387,7 @@ impl Renderer {
             //Update scenes
             for scene in &self.scenes {
                 //Update transformations
-                let offset = self.current_frame as u64 * scene.transforms_size as u64;
+                let offset = (self.current_frame * scene.transforms_size) as u64;
                 let data = self.base.device.map_memory(
                     scene.host_allocation,
                     offset,
@@ -635,7 +635,7 @@ impl Renderer {
                 .image_indices(std::slice::from_ref(&swapchain_index));
             self.swapchain.loader.queue_present(self.base.graphics_queue, &present_info)?;
         }
-        self.current_frame = (self.current_frame + 1) % self.framebuffer.frames.len() as u32;
+        self.current_frame = (self.current_frame + 1) % self.framebuffer.frames.len();
         self.transaction.clear();
         Ok(())
     }

@@ -67,7 +67,7 @@ impl<'a> Renderer {
             pipeline::skybox::create_layout(base.clone())?,
         ];
         let framebuffer = Framebuffer::new(base.clone(), extent, &layouts)?;
-        let swapchain = Swapchain::new(&base, None)?;
+        let swapchain = Swapchain::new(base.clone(), None)?;
         let camera = Camera::new();
         //Skybox mesh
         let skybox_vertices: [f32; 3 * 14] = [
@@ -215,7 +215,7 @@ impl<'a> Renderer {
                     //Recreate swapchain
                     self.base.device.queue_wait_idle(self.base.graphics_queue)?;
                     self.swapchain = swapchain::Swapchain::new(
-                        &self.base,
+                        self.base.clone(),
                         Some(self.swapchain.swapchain)
                     )?;
                 }

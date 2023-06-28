@@ -2,8 +2,10 @@ use ash::vk;
 use ash::extensions::khr;
 use crate::FRAME_COUNT;
 use crate::base::Base;
+use std::rc::Rc;
 
 pub struct Swapchain {
+    _base: Rc<Base>,
     pub extent: vk::Extent2D,
     pub loader: khr::Swapchain,
     pub swapchain: vk::SwapchainKHR,
@@ -11,7 +13,7 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    pub fn new(base: &Base, old_swapchain: Option<vk::SwapchainKHR>)
+    pub fn new(base: Rc<Base>, old_swapchain: Option<vk::SwapchainKHR>)
         -> Result<Self, vk::Result> {
         let surface_capabilities = unsafe {
             base.surface_loader.get_physical_device_surface_capabilities(
@@ -42,7 +44,7 @@ impl Swapchain {
         unsafe {
             let swapchain = loader.create_swapchain(&create_info, None)?;
             let images = loader.get_swapchain_images(swapchain)?;
-            Ok(Self {extent, loader, swapchain, images})
+            Ok(Self {_base: base, extent, loader, swapchain, images})
         }
     }
 }

@@ -15,4 +15,5 @@ Cargo.lock
 
 # Custom
 spv/
-assets/
+assets/*
+!assets/dfg_lut.bin

@@ -1,5 +1,5 @@
 use ash::vk;
-use crate::{FRAME_COUNT, COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT, MAX_TEXTURES};
+use crate::{FRAME_COUNT, COLOR_FORMAT, DEPTH_FORMAT, SAMPLE_COUNT};
 use super::base::Base;
 use super::pipeline::PipelineLayout;
 use std::rc::Rc;
@@ -9,7 +9,6 @@ pub struct Framebuffer {
     pub extent: vk::Extent2D,
     pub render_pass: vk::RenderPass,
     pub pipelines: Vec<vk::Pipeline>,
-    pub descriptor_pool: vk::DescriptorPool,
     pub image_allocation: vk::DeviceMemory,
     pub frames: [Frame; FRAME_COUNT]
 }
@@ -27,7 +26,6 @@ pub struct Frame {
     pub image_views: [vk::ImageView; 3],
     pub framebuffer: vk::Framebuffer,
     pub command_buffer: vk::CommandBuffer,
-    pub descriptor_set: [vk::DescriptorSet; 2], //[mesh, skybox]
     //Synchronization
     /*
         Semaphores:
@@ -128,34 +126,6 @@ impl Framebuffer {
         let pipelines: Vec<vk::Pipeline> = pipeline_layouts.iter().map(
             |layout| (layout.create_pipeline)(&layout, extent, render_pass).unwrap()
         ).collect();
-        //Descriptor pool
-        let pool_sizes = [
-            *vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(3 * FRAME_COUNT as u32),
-            *vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::SAMPLER)
-                .descriptor_count(FRAME_COUNT as u32),
-            *vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count((FRAME_COUNT * MAX_TEXTURES) as u32),
-            *vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(4 * FRAME_COUNT as u32)
-        ];
-        let create_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets(2 * FRAME_COUNT as u32)
-            .pool_sizes(&pool_sizes);
-        let descriptor_pool = unsafe {base.device.create_descriptor_pool(&create_info, None)}?;
-        //Descriptor sets
-        let layouts: Vec<vk::DescriptorSetLayout> =
-            pipeline_layouts.iter().map(
-                |layout| std::iter::repeat(layout.descriptor_set_layout).take(FRAME_COUNT)
-            ).flatten().collect();
-        let allocate_info = vk::DescriptorSetAllocateInfo::builder()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(&layouts);
-        let descriptor_sets = unsafe {base.device.allocate_descriptor_sets(&allocate_info)}?;
         //Frame images
         let extent_3d = vk::Extent3D::builder()
             .width(extent.width)
@@ -289,7 +259,6 @@ impl Framebuffer {
                 image_views,
                 framebuffer,
                 command_buffer,
-                descriptor_set: [descriptor_sets[i as usize], descriptor_sets[(i + FRAME_COUNT) as usize]],
                 semaphores,
                 fence
             }
@@ -299,7 +268,6 @@ impl Framebuffer {
             extent,
             render_pass,
             pipelines,
-            descriptor_pool,
             image_allocation,
             frames
         })
@@ -310,7 +278,6 @@ impl Drop for Framebuffer {
     fn drop(&mut self) {
         unsafe {
             self.base.device.destroy_render_pass(self.render_pass, None);
-            self.base.device.destroy_descriptor_pool(self.descriptor_pool, None);
             for pipeline in &self.pipelines {
                 self.base.device.destroy_pipeline(*pipeline, None);
             }

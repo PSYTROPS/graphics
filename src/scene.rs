@@ -49,8 +49,7 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
-    pub textures: Vec<image::RgbaImage>,
-    pub lights: Vec<PointLight>
+    pub textures: Vec<image::RgbaImage>
 }
 
 impl Node {
@@ -136,6 +135,8 @@ impl Scene {
                 }
                 indices.append(&mut local_indices);
                 //Read vertex attributes
+                //TODO: Additional texture coordinates
+                //TODO: Fill missing attributes
                 let mut positions = Vec::<na::Vector3<f32>>::new();
                 let mut normals = Vec::<na::Vector3<f32>>::new();
                 let mut texcoords = Vec::<na::Vector2<f32>>::new();
@@ -281,9 +282,6 @@ impl Scene {
                 _ => panic!("Unsupported image format")
             }
         }).collect());
-        //Lights
-        //TODO: KHR_lights_punctual support
-        let lights: Vec<PointLight> = vec![];
-        Ok(Self {nodes, meshes, materials, textures, lights})
+        Ok(Self {nodes, meshes, materials, textures})
     }
 }

@@ -19,7 +19,7 @@ impl Environment {
         skybox: &[u8],
         diffuse: &[u8],
         specular: &[u8]
-        ) -> Result<Environment, vk::Result> {
+    ) -> Result<Environment, vk::Result> {
 		//Read files to buffer
 		let files = [skybox, diffuse, specular];
 		let readers = files.map(|file| Reader::new(file).unwrap());

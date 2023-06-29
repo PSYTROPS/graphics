@@ -1,6 +1,6 @@
 use graphics::Renderer;
 use graphics::scene::Scene;
-use graphics::scenery::Scenery;
+use graphics::scene_set::SceneSet;
 use graphics::environment::Environment;
 
 struct Inputs {
@@ -29,8 +29,10 @@ fn main() {
     path.pop();
     path.push("assets");
     //path.push("Cube.gltf");
-    //path.push("MetalRoughSpheres.glb");
-    path.push("bottle.glb");
+    path.push("MetalRoughSpheres.glb");
+    //path.push("DamagedHelmet.glb");
+    //path.push("SciFiHelmet.gltf");
+    //path.push("bottle.glb");
     let scene = Scene::load_gltf(path).unwrap();
     let environment = Environment::new(
         renderer.base.clone(),
@@ -39,8 +41,16 @@ fn main() {
         include_bytes!("../assets/diffuse.ktx2"),
         include_bytes!("../assets/specular.ktx2")
     ).unwrap();
-    let mut scenery = Scenery::new(&renderer, environment).unwrap();
-    scenery.push_scene(&scene, &renderer);
+    let mut scene_set = SceneSet::new(&renderer, environment).unwrap();
+    scene_set.push_scene(&scene, &renderer);
+    /*
+    scene_set.lights[0] = PointLight {
+        pos: [1.0, 0.0, 1.0, 0.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+        intensity: 0.0,
+        range: 8.0
+    };
+    */
     //Event loop
     let mut event_pump = sdl.event_pump().unwrap();
     let mut now = std::time::Instant::now();
@@ -122,6 +132,6 @@ fn main() {
         if inputs.yaw_right {rotation[1] -= 1.0 * delta.as_secs_f32();}
         renderer.camera.rotate(rotation[0], rotation[1]);
         //Draw
-        renderer.draw(&scenery).unwrap();
+        renderer.draw(&scene_set).unwrap();
     }
 }

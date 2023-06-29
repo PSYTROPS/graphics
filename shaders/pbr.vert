@@ -4,7 +4,6 @@
 layout(location=0) in vec3 in_pos;
 layout(location=1) in vec3 in_normal;
 layout(location=2) in vec2 in_texcoords;
-layout(location=3) in uint in_material;
 
 //Output
 layout(location=0) out vec3 out_pos;
@@ -20,17 +19,41 @@ layout(push_constant) uniform constants {
 };
 
 //Descriptors
-layout(set=0, binding=0) restrict readonly buffer storage {
-	mat4 transformations[];
+struct Primitive {
+	uint material;
+};
+layout(std140, set=0, binding=0) restrict readonly buffer primitive_storage {
+	Primitive primitives[];
+};
+struct Node {
+	mat4 transform;
+	mat4 inverse_transform;
+	uint mesh;
+	uint flags;
+};
+layout(std140, set=0, binding=1) restrict readonly buffer node_storage {
+	Node nodes[];
+};
+struct Extra {
+	uint node;
+	uint primitive;
+};
+layout(std140, set=0, binding=2) restrict readonly buffer extra_storage {
+	Extra extras[];
 };
 
 void main() {
+	//Inputs
+	const Extra extra = extras[gl_DrawID];
+	const Node node = nodes[extra.node];
+	const Primitive primitive = primitives[extra.primitive];
+	//Position
 	const vec4 pos = vec4(in_pos, 1.0); //Model-space position
-	const mat4 t = transformations[gl_DrawID];
-	const vec4 world_pos = t * pos;
+	const vec4 world_pos = node.transform * pos;
 	gl_Position = projection * view * world_pos;
-	out_pos = world_pos.xyz;
-	out_normal = normalize(vec3(transpose(inverse(t)) * vec4(in_normal, 0.0)));
+	//Outputs
+	out_pos = vec3(world_pos);
+	out_normal = normalize(vec3(transpose(node.inverse_transform) * vec4(in_normal, 0.0)));
 	out_texcoords = in_texcoords;
-	out_material = in_material;
+	out_material = primitive.material;
 }

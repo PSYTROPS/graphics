@@ -25,22 +25,22 @@ struct Material {
 	float metal;
 	float rough;
 };
-layout(std140, set=0, binding=1) restrict readonly buffer material_buffer {
+layout(std140, set=0, binding=3) restrict readonly buffer material_buffer {
 	Material materials[];
 };
-layout(set=0, binding=2) uniform sampler s;
-layout(set=0, binding=3) uniform texture2D textures[64];
+layout(set=0, binding=4) uniform sampler s;
+layout(set=0, binding=5) uniform texture2D textures[64];
 struct PointLight {
 	vec4 pos;
 	vec4 color;
 	float intensity;
 	float range;
 };
-layout(std140, set=0, binding=4) restrict readonly buffer light_buffer {
+layout(std140, set=0, binding=6) restrict readonly buffer light_buffer {
 	PointLight point_lights[64];
 };
-layout(set=0, binding=5) uniform samplerCube cubes[2];
-layout(set=0, binding=6) uniform sampler2D dfgLUT;
+layout(set=0, binding=7) uniform samplerCube cubes[2];
+layout(set=0, binding=8) uniform sampler2D dfgLUT;
 
 // Remapped and clamped roughness
 float alpha(float roughness) {
@@ -106,7 +106,7 @@ void main() {
 	vec3 multiscatter = 1.0f + f0 * (1.0f / dfg.y - 1.0f);
 	//Reflectance equation
 	vec3 outgoing = vec3(0.0);
-	for (uint i = 0; i < 1/*64*/; ++i) {
+	for (uint i = 0; i < 64; ++i) {
 		//Light
 		const PointLight light = point_lights[i];
 		const vec3 l = normalize(light.pos.xyz - in_pos);
@@ -126,8 +126,7 @@ void main() {
 		const vec3 diffuse = diffColor / PI;
 		//BDRF
 		const vec3 reflectance = multiscatter * specular + (1 - f) * diffuse;
-		// outgoing += reflectance * radiance * nl;
-		outgoing += d;
+		outgoing += reflectance * radiance * nl;
 	}
 	//IBL
 	const vec3 f = fresnel(nv, f0);

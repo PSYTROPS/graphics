@@ -2,18 +2,23 @@ use nalgebra as na;
 use nalgebra::geometry as na_geo;
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct Vertex {
     pub pos: na::Vector3<f32>,
     pub normal: na::Vector3<f32>,
-    pub tex: na::Vector2<f32>,
+    pub tex: na::Vector2<f32>
+}
+
+#[derive(Clone)]
+pub struct Primitive {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u16>,
     pub material: u32
 }
 
 #[derive(Clone)]
 pub struct Mesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u16>
+    pub primitives: Vec<Primitive>
 }
 
 #[derive(Clone)]
@@ -26,7 +31,7 @@ pub struct Node {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct Material {
     pub color: [f32; 4],
     pub color_texture: u32,
@@ -36,7 +41,7 @@ pub struct Material {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct PointLight {
     pub pos: [f32; 4],
     pub color: [f32; 4],
@@ -49,7 +54,7 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
-    pub textures: Vec<image::RgbaImage>
+    pub textures: Vec<image::RgbaImage> //TODO: Custom image format
 }
 
 impl Node {
@@ -111,11 +116,9 @@ impl Scene {
         }).collect();
         //Meshes
         let meshes: Vec<Mesh> = document.meshes().map(|mesh| {
-            let mut vertices = Vec::<Vertex>::new();
-            let mut indices = Vec::<u16>::new();
-            for primitive in mesh.primitives() {
-                //Read indices
-                let mut local_indices = Vec::<u16>::new();
+            let primitives: Vec<Primitive> = mesh.primitives().map(|primitive| {
+                let mut indices = Vec::<u16>::new();
+                //Indices
                 if let Some(accessor) = primitive.indices() {
                     let view = accessor.view().unwrap();
                     let buffer = view.buffer();
@@ -127,14 +130,19 @@ impl Scene {
                     };
                     for i in 0..accessor.count() {
                         let offset = offset + i * stride;
-                        let value = u16::from_le_bytes(
-                            data[offset..offset + accessor.size()].try_into().unwrap()
-                        );
-                        local_indices.push(value + vertices.len() as u16);
+                        let value = match accessor.size() {
+                            size @ 2 => u16::from_le_bytes(
+                                data[offset..offset + size].try_into().unwrap()
+                            ),
+                            size @ 4 => u32::from_le_bytes(
+                                data[offset..offset + size].try_into().unwrap()
+                            ) as u16,
+                            _ => panic!("Unknown index type size")
+                        };
+                        indices.push(value);
                     }
                 }
-                indices.append(&mut local_indices);
-                //Read vertex attributes
+                //Vertex attributes
                 //TODO: Additional texture coordinates
                 //TODO: Fill missing attributes
                 let mut positions = Vec::<na::Vector3<f32>>::new();
@@ -211,28 +219,33 @@ impl Scene {
                         _ => ()
                     }
                 }
+                //Fill missing attributes
+                if normals.len() < positions.len() {
+                    normals = std::iter::repeat(na::Vector3::<f32>::zeros()).take(positions.len()).collect();
+                }
+                if texcoords.len() < positions.len() {
+                    texcoords = std::iter::repeat(na::Vector2::<f32>::zeros()).take(positions.len()).collect();
+                }
                 //Create vertices
-                assert!(
-                    positions.len() == normals.len()
-                    && normals.len() == texcoords.len()
-                );
-                for i in 0..positions.len() {
-                    vertices.push(Vertex {
+                let vertices: Vec<Vertex> = (0..positions.len()).map(
+                    |i| Vertex {
                         pos: positions[i],
                         normal: normals[i],
                         tex: texcoords[i],
-                        material: match primitive.material().index() {
-                            Some(x) => x as u32 + 1,
-                            None => 0
-                        }
-                    });
-                }
-            }
-            Mesh {vertices, indices}
+                    }
+                ).collect();
+                //Material
+                let material = match primitive.material().index() {
+                    Some(x) => x as u32 + 1,
+                    None => 0
+                };
+                Primitive {vertices, indices, material}
+            }).collect();
+            Mesh {primitives}
         }).collect();
         //Materials
         let default_material = Material {
-            color: [1.0, 1.0, 1.0, 1.0],
+            color: [1.0, 0.0, 0.0, 1.0],
             color_texture: 0,
             metal_rough_texture: 0,
             metal_factor: 0.0,

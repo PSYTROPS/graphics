@@ -7,13 +7,15 @@ use camera::Camera;
 use transfer::Transfer;
 use transfer::transaction::Transaction;
 use pipeline::PipelineLayout;
-use scenery::Scenery;
+use scene_set::SceneSet;
+use device_scene::DeviceNode;
+use scene::PointLight;
 
 use std::rc::Rc;
 use std::cell::RefCell;
 
 pub mod scene;
-pub mod scenery;
+pub mod scene_set;
 pub mod environment;
 mod base;
 mod transfer;
@@ -21,7 +23,6 @@ mod framebuffer;
 mod swapchain;
 mod camera;
 mod device_scene;
-mod textures;
 mod pipeline;
 
 pub const FRAME_COUNT: usize = 2;
@@ -197,7 +198,7 @@ impl<'a> Renderer {
             3. Draw scenes
             4. Blit drawn image to swapchain image
     */
-    pub fn draw(&mut self, scenery: &Scenery) -> Result<(), vk::Result> {
+    pub fn draw(&mut self, scene_set: &SceneSet) -> Result<(), vk::Result> {
         let frame = &self.framebuffer.frames[self.current_frame];
         let mut transaction = self.transaction.borrow_mut();
         unsafe {
@@ -229,12 +230,19 @@ impl<'a> Renderer {
             )?;
             self.base.device.reset_fences(std::slice::from_ref(&frame.fence))?;
             //Transactions
+            //Update lights
+            transaction.buffer_write(
+                &scene_set.lights,
+                scene_set.lights_buffer,
+                self.current_frame * MAX_LIGHTS * std::mem::size_of::<PointLight>()
+            );
             //Update scene dynamic data
-            for scene in &scenery.scenes {
+            for scene in &scene_set.scenes {
+                let nodes_size = scene.nodes.len() * std::mem::size_of::<DeviceNode>();
                 transaction.buffer_write(
-                    &scene.transform_matrices,
-                    scene.transforms,
-                    self.current_frame * scene.transforms_size
+                    &scene.nodes,
+                    scene.buffers[6],
+                    self.current_frame * nodes_size
                 );
             }
             //Transfer operations
@@ -296,16 +304,16 @@ impl<'a> Renderer {
                 self.framebuffer.pipelines[0]
             );
             //Draw scene
-            for (i, scene) in scenery.scenes.iter().enumerate() {
+            for (i, scene) in scene_set.scenes.iter().enumerate() {
                 self.base.device.cmd_bind_vertex_buffers(
                     frame.command_buffer,
                     0,
-                    std::slice::from_ref(&scene.vertices),
+                    std::slice::from_ref(&scene.buffers[0]),
                     &[0]
                 );
                 self.base.device.cmd_bind_index_buffer(
                     frame.command_buffer,
-                    scene.indices,
+                    scene.buffers[1],
                     0,
                     vk::IndexType::UINT16
                 );
@@ -314,14 +322,14 @@ impl<'a> Renderer {
                     vk::PipelineBindPoint::GRAPHICS,
                     self.layouts[0].pipeline_layout,
                     0,
-                    std::slice::from_ref(&scenery.scene_descriptors(i, self.current_frame)),
+                    std::slice::from_ref(&scene_set.scene_descriptors(i, self.current_frame)),
                     &[]
                 );
                 self.base.device.cmd_draw_indexed_indirect(
                     frame.command_buffer,
-                    scene.draw_commands,
+                    scene.buffers[7],
                     0,
-                    scene.mesh_count,
+                    scene.nodes.len() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
                 );
             }
@@ -336,7 +344,7 @@ impl<'a> Renderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.layouts[1].pipeline_layout,
                 0,
-                std::slice::from_ref(&scenery.skybox_descriptors(self.current_frame)),
+                std::slice::from_ref(&scene_set.skybox_descriptors(self.current_frame)),
                 &[]
             );
             self.base.device.cmd_bind_vertex_buffers(

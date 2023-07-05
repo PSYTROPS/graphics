@@ -3,6 +3,8 @@ Realtime 3D graphics renderer.
 
 ![Demo](demo.png)
 
+![Demo](demo2.png)
+
 ## Features
 ### Lighting
 * [x] Physically-based rendering (PBR)

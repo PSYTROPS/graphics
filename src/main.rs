@@ -23,7 +23,6 @@ fn main() {
     let video = sdl.video().unwrap();
     let window = video.window("Graphics", 1024, 1024).vulkan().resizable().build().unwrap();
     let mut renderer = Renderer::new(&window).expect("Renderer creation error");
-    renderer.camera.pos[2] = 1.0;
     //Load scene
     let mut path = std::env::current_exe().unwrap();
     path.pop();
@@ -43,6 +42,7 @@ fn main() {
     ).unwrap();
     let mut scene_set = SceneSet::new(&renderer, environment).unwrap();
     scene_set.push_scene(&scene, &renderer);
+    scene_set.camera.pos[2] = 4.0;
     /*
     scene_set.lights[0] = PointLight {
         pos: [1.0, 0.0, 1.0, 0.0],
@@ -123,14 +123,14 @@ fn main() {
         if inputs.right {direction[1] += speed * delta.as_secs_f32();}
         if inputs.up {direction[2] += speed * delta.as_secs_f32();}
         if inputs.down {direction[2] -= speed * delta.as_secs_f32();}
-        renderer.camera.locomote(direction[0], direction[1], direction[2]);
+        scene_set.camera.locomote(direction[0], direction[1], direction[2]);
         //Rotation
         let mut rotation = [0.0; 2];
         if inputs.pitch_up {rotation[0] += 1.0 * delta.as_secs_f32();}
         if inputs.pitch_down {rotation[0] -= 1.0 * delta.as_secs_f32();}
         if inputs.yaw_left {rotation[1] += 1.0 * delta.as_secs_f32();}
         if inputs.yaw_right {rotation[1] -= 1.0 * delta.as_secs_f32();}
-        renderer.camera.rotate(rotation[0], rotation[1]);
+        scene_set.camera.rotate(rotation[0], rotation[1]);
         //Draw
         renderer.draw(&scene_set).unwrap();
     }

@@ -10,14 +10,12 @@ layout(location=3) in flat uint in_material;
 //Output
 layout(location=0) out vec4 out_color;
 
-//Push constants
-layout(push_constant) uniform constants {
+//Descriptors
+layout(set=0, binding=0) uniform camera {
 	mat4 view;
 	mat4 projection;
 	vec4 camera_pos;
 };
-
-//Descriptors
 struct Material {
 	vec4 color;
 	uint color_tex;
@@ -25,22 +23,22 @@ struct Material {
 	float metal;
 	float rough;
 };
-layout(std140, set=0, binding=3) restrict readonly buffer material_buffer {
+layout(std430, set=0, binding=4) restrict readonly buffer material_buffer {
 	Material materials[];
 };
-layout(set=0, binding=4) uniform sampler s;
-layout(set=0, binding=5) uniform texture2D textures[64];
+layout(set=0, binding=5) uniform sampler s;
+layout(set=0, binding=6) uniform texture2D textures[64];
 struct PointLight {
 	vec4 pos;
 	vec4 color;
 	float intensity;
 	float range;
 };
-layout(std140, set=0, binding=6) restrict readonly buffer light_buffer {
+layout(std430, set=0, binding=7) restrict readonly buffer light_buffer {
 	PointLight point_lights[64];
 };
-layout(set=0, binding=7) uniform samplerCube cubes[2];
-layout(set=0, binding=8) uniform sampler2D dfgLUT;
+layout(set=0, binding=8) uniform samplerCube cubes[2];
+layout(set=0, binding=9) uniform sampler2D dfgLUT;
 
 // Remapped and clamped roughness
 float alpha(float roughness) {

@@ -12,6 +12,7 @@ pub struct Base {
     pub surface: vk::SurfaceKHR,
     pub surface_loader: khr::Surface,
     pub physical_device: vk::PhysicalDevice,
+    pub physical_device_properties: vk::PhysicalDeviceProperties,
     pub device: ash::Device,
     //Command submission
     pub graphics_queue_family: u32,
@@ -73,6 +74,7 @@ impl Base {
                 instance.destroy_instance(None);
                 return Err(vk::Result::ERROR_UNKNOWN);
             };
+            let physical_device_properties = instance.get_physical_device_properties(physical_device);
             //Queue families
             let properties = instance.get_physical_device_queue_family_properties(physical_device);
             let graphics_queue_family = properties.iter().enumerate().position(
@@ -110,6 +112,7 @@ impl Base {
             let mut synchronization2 = vk::PhysicalDeviceSynchronization2Features::builder()
                 .synchronization2(true);
             let mut vk12_features = vk::PhysicalDeviceVulkan12Features::builder()
+                .draw_indirect_count(true)
                 .descriptor_indexing(true)
                 .shader_sampled_image_array_non_uniform_indexing(true)
                 .shader_storage_buffer_array_non_uniform_indexing(true)
@@ -147,6 +150,7 @@ impl Base {
                 surface,
                 surface_loader,
                 physical_device,
+                physical_device_properties,
                 device,
                 graphics_queue_family,
                 transfer_queue_family,

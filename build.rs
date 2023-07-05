@@ -22,6 +22,7 @@ fn compile_shaders() {
                     let shader_type = match extension {
                         "vert" => shaderc::ShaderKind::Vertex,
                         "frag" => shaderc::ShaderKind::Fragment,
+                        "comp" => shaderc::ShaderKind::Compute,
                         _ => shaderc::ShaderKind::InferFromSource
                     };
                     //Read shader source

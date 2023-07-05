@@ -1,23 +1,29 @@
 use ash::vk;
 use super::Renderer;
+use super::camera::Camera;
 use super::{FRAME_COUNT, MAX_TEXTURES, MAX_LIGHTS};
 use super::base::Base;
 use super::device_scene::DeviceScene;
 use super::environment::Environment;
 use super::scene::{Scene, PointLight};
-use super::device_scene::DeviceNode;
 use std::rc::Rc;
+
+const UNIFORM_SIZE: usize = 2 * 64 + 16;
 
 pub struct SceneSet {
     base: Rc<Base>,
+    pub camera: Camera,
     descriptor_pool: vk::DescriptorPool,
     //Descriptor sets: [scenes, skybox]
     pub descriptor_sets: Vec<vk::DescriptorSet>,
     pub scenes: Vec<DeviceScene>,
     pub environment: Environment,
     pub lights: [PointLight; MAX_LIGHTS],
+    pub camera_uniform_size: usize,
     pub lights_buffer: vk::Buffer,
-    buffer_alloc: vk::DeviceMemory
+    pub camera_buffer: vk::Buffer,
+    buffer_alloc: vk::DeviceMemory,
+    buffer_descriptors: [vk::DescriptorBufferInfo; 2 * FRAME_COUNT]
 }
 
 impl SceneSet {
@@ -41,25 +47,55 @@ impl SceneSet {
         let descriptor_pool = unsafe {
             base.device.create_descriptor_pool(&create_info, None)
         }?;
-        //Lights
+        //Buffers
         let lights = [PointLight::default(); MAX_LIGHTS];
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size((FRAME_COUNT * MAX_LIGHTS * std::mem::size_of::<PointLight>()) as u64)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let (lights_buffers, buffer_alloc) = base.create_buffers(
-            std::slice::from_ref(&buffer_info),
+        let alignment = base.physical_device_properties.limits.min_uniform_buffer_offset_alignment as usize;
+        let uniform_size = (UNIFORM_SIZE + alignment - 1) & !(alignment - 1);
+        let buffer_sizes = [
+            MAX_LIGHTS * std::mem::size_of::<PointLight>(),
+            uniform_size
+        ];
+        let create_infos = [
+            //Lights
+            *vk::BufferCreateInfo::builder()
+                .size((FRAME_COUNT * buffer_sizes[0]) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
+            //Camera
+            *vk::BufferCreateInfo::builder()
+                .size((FRAME_COUNT * buffer_sizes[1]) as u64)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        ];
+        let (buffers, buffer_alloc) = base.create_buffers(
+            &create_infos,
             vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
+        //Buffer descriptors
+        let mut buffer_descriptors = [vk::DescriptorBufferInfo::default(); 2 * FRAME_COUNT];
+        for b in 0..2 {
+            let buffer = buffers[b];
+            let size = buffer_sizes[b];
+            for f in 0..FRAME_COUNT {
+                buffer_descriptors[b * FRAME_COUNT + f] = *vk::DescriptorBufferInfo::builder()
+                    .buffer(buffer)
+                    .offset((f * size) as u64)
+                    .range(size as u64);
+            }
+        }
         Ok(Self {
             base,
+            camera: Camera::new(),
             descriptor_pool,
             descriptor_sets: vec![],
             scenes: vec![],
             environment,
             lights,
-            lights_buffer: lights_buffers[0],
-            buffer_alloc
+            camera_uniform_size: uniform_size,
+            lights_buffer: buffers[0],
+            camera_buffer: buffers[1],
+            buffer_alloc,
+            buffer_descriptors
         })
     }
 
@@ -69,31 +105,38 @@ impl SceneSet {
             self.base.device.destroy_descriptor_pool(self.descriptor_pool, None);
         }
         //Create pool
-        let scene_set_count = FRAME_COUNT * self.scenes.len();
+        let pbr_set_count = FRAME_COUNT * self.scenes.len();
+        //let cull_set_count = FRAME_COUNT * self.scenes.len();
         let env_set_count = FRAME_COUNT;
+        //TODO: Automatic pool size counting
+        //FIXME: Recount pool size
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count((pbr_set_count + env_set_count) as u32),
+            *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(5 * scene_set_count as u32),
+                .descriptor_count(5 * pbr_set_count as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLER)
-                .descriptor_count(scene_set_count as u32),
+                .descriptor_count(pbr_set_count as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count((scene_set_count * MAX_TEXTURES) as u32),
+                .descriptor_count((pbr_set_count * MAX_TEXTURES) as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(3 * scene_set_count as u32 + env_set_count as u32)
+                .descriptor_count(3 * pbr_set_count as u32 + env_set_count as u32)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets((scene_set_count + env_set_count) as u32)
+            .max_sets((pbr_set_count + env_set_count) as u32)
             .pool_sizes(&pool_sizes);
         self.descriptor_pool = unsafe {
             self.base.device.create_descriptor_pool(&create_info, None)
         }?;
         //Allocate descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> = [
-            std::iter::repeat(renderer.layouts[0].descriptor_set_layout).take(scene_set_count),
+            std::iter::repeat(renderer.layouts[0].descriptor_set_layout).take(pbr_set_count),
+            //std::iter::repeat(renderer.layouts[2].descriptor_set_layout).take(cull_set_count),
             std::iter::repeat(renderer.layouts[1].descriptor_set_layout).take(env_set_count)
         ].into_iter().flatten().collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
@@ -102,160 +145,117 @@ impl SceneSet {
         self.descriptor_sets = unsafe {
             self.base.device.allocate_descriptor_sets(&allocate_info)
         }?;
+
         //Update descriptor sets
         //[scenes: [frames: [items: []]], skybox: [frames: []]]
         let mut writes = Vec::<vk::WriteDescriptorSet>::new();
-        let mut buffer_infos = Vec::<vk::DescriptorBufferInfo>::new();
-        let mut image_infos = Vec::<vk::DescriptorImageInfo>::new();
-        //Scene
-        let cubemap_image_infos = [
-            *vk::DescriptorImageInfo::builder()
-                .sampler(self.environment.sampler)
-                .image_view(self.environment.image_views[1])
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            *vk::DescriptorImageInfo::builder()
-                .sampler(self.environment.sampler)
-                .image_view(self.environment.image_views[2])
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        ];
-        let dfg_image_info = vk::DescriptorImageInfo::builder()
-            .sampler(renderer.dfg_lookup_sampler)
-            .image_view(renderer.dfg_lookup_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        //PBR pipeline
         for (i, scene) in self.scenes.iter().enumerate() {
-            //Buffers
-            let buffer_offset = buffer_infos.len();
-            buffer_infos.push(*vk::DescriptorBufferInfo::builder()
-                .buffer(scene.buffers[2])
-                .offset(0)
-                .range(vk::WHOLE_SIZE)
-            ); //Primitives
-            buffer_infos.push(*vk::DescriptorBufferInfo::builder()
-                .buffer(scene.buffers[4])
-                .offset(0)
-                .range(vk::WHOLE_SIZE)
-            ); //Materials
-            buffer_infos.extend((0..FRAME_COUNT).map(|frame| {
-                let size = scene.nodes.len() * std::mem::size_of::<DeviceNode>();
-                *vk::DescriptorBufferInfo::builder()
-                    .buffer(scene.buffers[6])
-                    .offset((frame * size) as u64)
-                    .range(size as u64)
-            })); //Nodes
-            buffer_infos.extend((0..FRAME_COUNT).map(|frame| {
-                let size = scene.nodes.len() * std::mem::size_of::<[u32; 2]>();
-                *vk::DescriptorBufferInfo::builder()
-                    .buffer(scene.buffers[8])
-                    .offset((frame * size) as u64)
-                    .range(size as u64)
-            })); //Draw command extras
-            buffer_infos.extend((0..FRAME_COUNT).map(|frame| {
-                let size = MAX_LIGHTS * std::mem::size_of::<PointLight>();
-                *vk::DescriptorBufferInfo::builder()
-                    .buffer(self.lights_buffer)
-                    .offset((frame * size) as u64)
-                    .range(size as u64)
-            })); //Lights
-            //Images
-            let image_offset = image_infos.len();
-            image_infos.extend(
-                scene.image_views.iter().map(
-                    |&image_view| *vk::DescriptorImageInfo::builder()
-                        .image_view(image_view)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                ).chain(std::iter::repeat(*vk::DescriptorImageInfo::builder()
-                    .image_view(scene.image_views[0])
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                ).take(MAX_TEXTURES - scene.images.len()))
-            ); //Textures
-            debug_assert!(image_infos.len() - image_offset == MAX_TEXTURES);
             //Per-frame descriptor writes
             for frame in 0..FRAME_COUNT {
                 let descriptor_set = self.descriptor_sets[FRAME_COUNT * i + frame];
                 writes.extend_from_slice(&[
-                    //Primitives
+                    //Uniforms
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(0)
                         .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &buffer_infos[buffer_offset]
+                            &self.buffer_descriptors[FRAME_COUNT + frame]
                         )),
-                    //Nodes
+                    //Primitives
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(1)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &buffer_infos[buffer_offset + 2 + frame]
+                            &scene.buffer_descriptors[0]
                         )),
-                    //Draw command extras
+                    //Nodes
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(2)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &buffer_infos[buffer_offset + 2 + FRAME_COUNT + frame]
+                            &scene.buffer_descriptors[4 + frame]
                         )),
-                    //Materials
+                    //Draw command extras
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(3)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &buffer_infos[buffer_offset + 1]
+                            &scene.buffer_descriptors[4 + FRAME_COUNT + frame]
+                        )),
+                    //Materials
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(4)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[2]
                         )),
                     //Textures
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
-                        .dst_binding(5)
-                        .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                        .image_info(&image_infos[image_offset..image_offset + MAX_TEXTURES]),
-                    //Lights
-                    *vk::WriteDescriptorSet::builder()
-                        .dst_set(descriptor_set)
                         .dst_binding(6)
                         .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(
-                            &buffer_infos[buffer_offset + 2 + 2 * FRAME_COUNT + frame]
-                        )),
-                    //Cubemaps
+                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .image_info(&scene.image_descriptors),
+                    //Lights
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(7)
                         .dst_array_element(0)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(&cubemap_image_infos),
-                    //DFG lookup
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &self.buffer_descriptors[frame]
+                        )),
+                    //Cubemaps
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(8)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .image_info(std::slice::from_ref(&dfg_image_info))
+                        .image_info(&self.environment.descriptors[1..=2]),
+                    //DFG lookup
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(9)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(std::slice::from_ref(&renderer.dfg_descriptor))
                 ])
             }
         }
-        //Skybox
-        let skybox_image_info = vk::DescriptorImageInfo::builder()
-            .sampler(self.environment.sampler)
-            .image_view(self.environment.image_views[0])
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+        //Skybox pipeline
+        //Camera
         writes.extend((0..FRAME_COUNT).map(
             |frame| *vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[scene_set_count + frame])
+                .dst_set(self.descriptor_sets[pbr_set_count + frame])
                 .dst_binding(0)
                 .dst_array_element(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(std::slice::from_ref(&skybox_image_info))
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(
+                    std::slice::from_ref(&self.buffer_descriptors[FRAME_COUNT + frame])
+                )
         ));
-        debug_assert!(writes.len() == 8 * scene_set_count + env_set_count);
+        //Skybox image
+        writes.extend((0..FRAME_COUNT).map(
+            |frame| *vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[pbr_set_count + frame])
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&self.environment.descriptors[0]))
+        ));
+
         unsafe {
             self.base.device.update_descriptor_sets(&writes, &[]);
         }
@@ -296,6 +296,7 @@ impl Drop for SceneSet {
             self.base.device.device_wait_idle().unwrap();
             self.base.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.base.device.destroy_buffer(self.lights_buffer, None);
+            self.base.device.destroy_buffer(self.camera_buffer, None);
             self.base.device.free_memory(self.buffer_alloc, None);
         }
     }

@@ -6,24 +6,28 @@ use std::rc::Rc;
 
 pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
     //Descriptor set layout
-    let binding = vk::DescriptorSetLayoutBinding::builder()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+    let bindings = [
+        //Camera
+        *vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+        //Image
+        *vk::DescriptorSetLayoutBinding::builder()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+    ];
     let create_info = vk::DescriptorSetLayoutCreateInfo::builder()
-        .bindings(std::slice::from_ref(&binding));
+        .bindings(&bindings);
     let descriptor_set_layout = unsafe {
         base.device.create_descriptor_set_layout(&create_info, None)?
     };
     //Pipeline layout
-    let push_constant = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-        .offset(0)
-        .size(2 * 16 * 4);
     let create_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(std::slice::from_ref(&descriptor_set_layout))
-        .push_constant_ranges(std::slice::from_ref(&push_constant));
+        .set_layouts(std::slice::from_ref(&descriptor_set_layout));
     let pipeline_layout = unsafe {
         base.device.create_pipeline_layout(&create_info, None)?
     };

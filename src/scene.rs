@@ -30,21 +30,21 @@ pub struct Node {
     pub scale: na_geo::Scale3<f32>
 }
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Copy, Clone, Default)]
 pub struct Material {
-    pub color: [f32; 4],
+    pub color: na::Vector4<f32>,
     pub color_texture: u32,
     pub metal_rough_texture: u32,
     pub metal_factor: f32,
     pub rough_factor: f32
 }
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Copy, Clone, Default)]
 pub struct PointLight {
-    pub pos: [f32; 4],
-    pub color: [f32; 4],
+    pub pos: na::Vector4<f32>,
+    pub color: na::Vector4<f32>,
     pub intensity: f32,
     pub range: f32
 }
@@ -245,7 +245,7 @@ impl Scene {
         }).collect();
         //Materials
         let default_material = Material {
-            color: [1.0, 0.0, 0.0, 1.0],
+            color: na::Vector4::<f32>::new(1.0, 0.0, 0.0, 1.0),
             color_texture: 0,
             metal_rough_texture: 0,
             metal_factor: 0.0,
@@ -255,7 +255,7 @@ impl Scene {
         materials.append(&mut document.materials().map(|material| {
             let pbr = material.pbr_metallic_roughness();
             Material {
-                color: pbr.base_color_factor(),
+                color: pbr.base_color_factor().into(),
                 color_texture: match pbr.base_color_texture() {
                     Some(info) => info.texture().index() + 1,
                     None => 0

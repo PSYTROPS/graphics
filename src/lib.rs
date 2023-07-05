@@ -3,7 +3,6 @@ use ash::vk;
 use base::Base;
 use framebuffer::Framebuffer;
 use swapchain::Swapchain;
-use camera::Camera;
 use transfer::Transfer;
 use transfer::transaction::Transaction;
 use pipeline::PipelineLayout;
@@ -41,13 +40,13 @@ pub struct Renderer {
     layouts: [PipelineLayout; 2],
     swapchain: Swapchain,
     //Scene data
-    pub camera: Camera,
     skybox_vertex_buffer: vk::Buffer,
     skybox_vertex_alloc: vk::DeviceMemory,
     dfg_lookup: vk::Image,
     dfg_lookup_view: vk::ImageView,
     dfg_lookup_sampler: vk::Sampler,
     dfg_lookup_alloc: vk::DeviceMemory,
+    dfg_descriptor: vk::DescriptorImageInfo,
     current_frame: usize
 }
 
@@ -66,10 +65,10 @@ impl<'a> Renderer {
         let layouts = [
             pipeline::mesh::create_layout(base.clone())?,
             pipeline::skybox::create_layout(base.clone())?,
+            //pipeline::cull::create_layout(base.clone())?
         ];
         let framebuffer = Framebuffer::new(base.clone(), extent, &layouts)?;
         let swapchain = Swapchain::new(base.clone(), None)?;
-        let camera = Camera::new();
         //Skybox mesh
         let skybox_vertices: [f32; 3 * 14] = [
             1.0, -1.0, -1.0,
@@ -169,6 +168,10 @@ impl<'a> Renderer {
             .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .anisotropy_enable(false);
         let dfg_lookup_sampler = unsafe {base.device.create_sampler(&create_info, None)?};
+        let dfg_descriptor = *vk::DescriptorImageInfo::builder()
+            .sampler(dfg_lookup_sampler)
+            .image_view(dfg_lookup_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         Ok(Renderer {
             base,
             transfer,
@@ -176,13 +179,13 @@ impl<'a> Renderer {
             layouts,
             framebuffer,
             swapchain,
-            camera,
             skybox_vertex_buffer: vertex_buffers[0],
             skybox_vertex_alloc: vertex_alloc,
             dfg_lookup: lut_images[0],
             dfg_lookup_view,
             dfg_lookup_sampler,
             dfg_lookup_alloc: lut_allocation,
+            dfg_descriptor,
             current_frame: 0
         })
     }
@@ -193,10 +196,9 @@ impl<'a> Renderer {
         1. Execute transfers
         2. Acquire swapchain image
         3. Record graphics command buffer
-            1. Write push constants
-            2. Update scene data
-            3. Draw scenes
-            4. Blit drawn image to swapchain image
+            1. Update scene data
+            2. Draw scenes
+            3. Blit drawn image to swapchain image
     */
     pub fn draw(&mut self, scene_set: &SceneSet) -> Result<(), vk::Result> {
         let frame = &self.framebuffer.frames[self.current_frame];
@@ -230,6 +232,16 @@ impl<'a> Renderer {
             )?;
             self.base.device.reset_fences(std::slice::from_ref(&frame.fence))?;
             //Transactions
+            //Update uniforms
+            let mut uniforms: [f32; 36] = [0.0; 36];
+            uniforms[0..16].copy_from_slice(scene_set.camera.view().as_slice());
+            uniforms[16..32].copy_from_slice(scene_set.camera.projection().as_slice());
+            uniforms[32..36].copy_from_slice(scene_set.camera.pos.to_homogeneous().as_slice());
+            transaction.buffer_write(
+                &uniforms,
+                scene_set.camera_buffer,
+                self.current_frame * scene_set.camera_uniform_size
+            );
             //Update lights
             transaction.buffer_write(
                 &scene_set.lights,
@@ -238,6 +250,7 @@ impl<'a> Renderer {
             );
             //Update scene dynamic data
             for scene in &scene_set.scenes {
+                //Nodes
                 let nodes_size = scene.nodes.len() * std::mem::size_of::<DeviceNode>();
                 transaction.buffer_write(
                     &scene.nodes,
@@ -260,24 +273,6 @@ impl<'a> Renderer {
                     .image_memory_barriers(&transaction.end_image_barriers);
                 self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             }
-            //Push constants
-            let mut push_constants: [f32; 36] = [0.0; 36];
-            push_constants[0..16].copy_from_slice(self.camera.view().as_slice());
-            push_constants[16..32].copy_from_slice(self.camera.projection().as_slice());
-            push_constants[32] = self.camera.pos.x;
-            push_constants[33] = self.camera.pos.y;
-            push_constants[34] = self.camera.pos.z;
-            push_constants[35] = 0.0;
-            self.base.device.cmd_push_constants(
-                frame.command_buffer,
-                self.layouts[0].pipeline_layout,
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                std::slice::from_raw_parts(
-                    push_constants.as_ptr() as *const u8,
-                    4 * push_constants.len()
-                )
-            );
             //Drawing
             let render_area = vk::Rect2D::builder()
                 .offset(vk::Offset2D::default())
@@ -303,7 +298,7 @@ impl<'a> Renderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.framebuffer.pipelines[0]
             );
-            //Draw scene
+            //Draw scenes
             for (i, scene) in scene_set.scenes.iter().enumerate() {
                 self.base.device.cmd_bind_vertex_buffers(
                     frame.command_buffer,

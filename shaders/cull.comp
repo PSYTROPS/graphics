@@ -1,0 +1,98 @@
+#version 460
+
+//Descriptors
+layout(set=0, binding=0) uniform camera {
+	mat4 view;
+	mat4 projection;
+	vec4 camera_pos;
+};
+struct Node {
+	mat4 transform;
+	mat4 inverse_transform;
+	uint mesh;
+	uint flags;
+};
+layout(std430, set=0, binding=1) restrict readonly buffer node_storage {
+	Node nodes[];
+};
+struct Mesh {
+	vec4 lower_corner;
+	vec4 upper_corner;
+	uint primitive_offset;
+	uint primitive_count;
+};
+layout(std140, set=0, binding=2) restrict readonly buffer mesh_storage {
+	Mesh meshes[];
+};
+struct DrawCommand {
+	uint index_count;
+	uint instance_count;
+	uint firstIndex;
+	int vertex_offset;
+	uint first_instance;
+};
+layout(std140, set=0, binding=3) restrict readonly buffer primitive_storage {
+	DrawCommand primitives[];
+};
+layout(std140, set=0, binding=4) volatile restrict buffer draw_count_storage {
+	uint draw_count;
+};
+layout(std140, set=0, binding=5) restrict writeonly buffer draw_command_storage {
+	DrawCommand draw_commands[];
+};
+struct Extra {
+	uint node;
+	uint primitive;
+};
+layout(std430, set=0, binding=6) restrict writeonly buffer extra_storage {
+	Extra extras[];
+};
+
+bool frustum_culling(Node node, Mesh mesh) {
+	const vec4 lower_corner = mesh.lower_corner;
+	const vec4 upper_corner = mesh.upper_corner;
+	vec4 corners[8] = {
+		lower_corner,
+		vec4(lower_corner.x, lower_corner.y, upper_corner.z, 1),
+		vec4(lower_corner.x, upper_corner.y, lower_corner.z, 1),
+		vec4(lower_corner.x, upper_corner.y, upper_corner.z, 1),
+		vec4(upper_corner.x, lower_corner.y, lower_corner.z, 1),
+		vec4(upper_corner.x, lower_corner.y, upper_corner.z, 1),
+		vec4(upper_corner.x, upper_corner.y, lower_corner.z, 1),
+		upper_corner
+	};
+	//Transform corners into frustum space
+	for (uint i = 0; i < 8; ++i) {
+		const vec4 corner = corners[i];
+		corners[i] = projection * view * node.transform * corner;
+	}
+	//Check frustum planes
+	bool visible = true;
+	//{-x, -y, -z, +x, +y, +z}
+	bool excluded[6] = {true, true, true, true, true, true};
+	for (uint i = 0; i < 8; ++i) {
+		const vec4 corner = corners[i];
+		excluded[0] = excluded[0] && corner.x < -1;
+		excluded[1] = excluded[1] && corner.y < -1;
+		excluded[2] = excluded[2] && corner.z < 0;
+		excluded[3] = excluded[3] && corner.x > 1;
+		excluded[4] = excluded[4] && corner.y > 1;
+		excluded[5] = excluded[5] && corner.z > 1;
+	}
+	for (uint i = 0; i < 6; ++i) visible = visible && !excluded[i];
+	return visible;
+}
+
+void main() {
+	const Node node = nodes[gl_GlobalInvocationID.x];
+	const Mesh mesh = meshes[node.mesh];
+	bool visible = bool(node.flags & 1);
+	visible = visible && frustum_culling(node, mesh);
+	if (visible) {
+		const uint command_offset = atomicAdd(draw_count, mesh.primitive_count);
+		for (uint i = 0; i < mesh.primitive_count; ++i) {
+			draw_commands[command_offset + i] = primitives[mesh.primitive_offset + i];
+			extras[command_offset + i] = Extra(gl_GlobalInvocationID.x, node.mesh);
+		}
+	}
+}

@@ -20,58 +20,64 @@ pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
     };
     //Descriptor set layout
     let bindings = [
-        //Primitives
+        //Camera
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Nodes
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+        //Primitives
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Draw command extras
+        //Nodes
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Materials
+        //Draw command extras
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX),
+        //Materials
+        *vk::DescriptorSetLayoutBinding::builder()
+            .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         //Sampler
         *vk::DescriptorSetLayoutBinding::builder()
-            .binding(4)
+            .binding(5)
             .descriptor_type(vk::DescriptorType::SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .immutable_samplers(std::slice::from_ref(&sampler)),
         //Textures
         *vk::DescriptorSetLayoutBinding::builder()
-            .binding(5)
+            .binding(6)
             .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
             .descriptor_count(MAX_TEXTURES as u32)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         //Lights
         *vk::DescriptorSetLayoutBinding::builder()
-            .binding(6)
+            .binding(7)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         //Cubemaps
         *vk::DescriptorSetLayoutBinding::builder()
-            .binding(7)
+            .binding(8)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(2)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         //DFG lookup
         *vk::DescriptorSetLayoutBinding::builder()
-            .binding(8)
+            .binding(9)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
@@ -82,13 +88,8 @@ pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
         base.device.create_descriptor_set_layout(&create_info, None)?
     };
     //Pipeline layout
-    let push_constant = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
-        .offset(0)
-        .size(2 * 16 * 4 + 4 * 4);
     let create_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(std::slice::from_ref(&descriptor_set_layout))
-        .push_constant_ranges(std::slice::from_ref(&push_constant));
+        .set_layouts(std::slice::from_ref(&descriptor_set_layout));
     let pipeline_layout = unsafe {
         base.device.create_pipeline_layout(&create_info, None)?
     };

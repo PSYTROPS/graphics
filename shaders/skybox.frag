@@ -2,7 +2,7 @@
 
 layout(location=0) in vec3 in_pos;
 layout(location=0) out vec4 out_color;
-layout(set=0, binding=0) uniform samplerCube cube;
+layout(set=0, binding=1) uniform samplerCube cube;
 
 vec3 aces_tonemap(vec3 hdr) {
 	vec3 aces = hdr * 0.6;

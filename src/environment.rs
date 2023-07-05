@@ -9,7 +9,8 @@ pub struct Environment {
     pub images: [vk::Image; 3],
     pub image_views: [vk::ImageView; 3],
     pub sampler: vk::Sampler,
-    pub allocation: vk::DeviceMemory
+    pub allocation: vk::DeviceMemory,
+    pub descriptors: [vk::DescriptorImageInfo; 3]
 }
 
 impl Environment {
@@ -126,12 +127,28 @@ impl Environment {
             .anisotropy_enable(false)
             .max_lod(vk::LOD_CLAMP_NONE);
         let sampler = unsafe {base.device.create_sampler(&create_info, None)?};
+        //Descriptors
+        let descriptors = [
+            *vk::DescriptorImageInfo::builder()
+                .sampler(sampler)
+                .image_view(image_views[0])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            *vk::DescriptorImageInfo::builder()
+                .sampler(sampler)
+                .image_view(image_views[1])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            *vk::DescriptorImageInfo::builder()
+                .sampler(sampler)
+                .image_view(image_views[2])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        ];
 		Ok(Environment{
 			base,
 			images: images.try_into().unwrap(),
 			image_views,
             sampler,
-			allocation
+			allocation,
+            descriptors
 		})
 	}
 }

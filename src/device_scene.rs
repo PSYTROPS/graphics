@@ -1,37 +1,36 @@
 use ash::vk;
 use nalgebra as na;
-use super::FRAME_COUNT;
+
+use super::{FRAME_COUNT, MAX_TEXTURES};
 use super::base::Base;
 use super::scene::{Vertex, Material, Scene};
 use super::transfer::transaction::Transaction;
 use std::rc::Rc;
 
-//Device-local structures must obey GLSL std140 layout alignment rules
+//Device-local structures must obey GLSL std430 layout alignment rules
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DevicePrimitive {
-    pub material: u32,
-    _padding: [u32; 3]
+    pub material: u32
 }
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct DeviceMesh {
-    //TODO: Culling information
+    pub lower_bounds: na::Vector4<f32>,
+    pub upper_bounds: na::Vector4<f32>,
     pub primitive_offset: u32,
-    pub primitive_count: u32,
-    _padding: [u32; 2]
+    pub primitive_count: u32
 }
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct DeviceNode {
     pub transform: na::Matrix4<f32>,
     pub inverse_transform: na::Matrix4<f32>,
     pub mesh: u32,
-    pub flags: u32, //LSB is visibility
-    _padding: [u32; 2]
+    pub flags: u32 //LSB is visibility
 }
 
 pub struct DeviceScene {
@@ -49,14 +48,18 @@ pub struct DeviceScene {
         5. Primitive draw commands
         6. Nodes (duplicated)
         7. Draw commands (duplicated)
-        8. Draw command extras (node, primitive) (duplicated)
+        8. Draw extras [node, primitive] (duplicated)
+        9. Draw command count (duplicated)
     */
-    pub buffers: [vk::Buffer; 9],
+    pub buffers: [vk::Buffer; 10],
     pub buffer_alloc: vk::DeviceMemory,
+    pub buffer_sizes: [usize; 10],
+    pub buffer_descriptors: [vk::DescriptorBufferInfo; 4 + 3 * FRAME_COUNT],
     //Images
     pub images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
-    pub image_alloc: vk::DeviceMemory
+    pub image_alloc: vk::DeviceMemory,
+    pub image_descriptors: [vk::DescriptorImageInfo; MAX_TEXTURES]
 }
 
 impl DeviceScene {
@@ -73,14 +76,14 @@ impl DeviceScene {
         let mut meshes = Vec::<DeviceMesh>::new();
         for mesh in &scene.meshes {
             meshes.push(DeviceMesh {
+                lower_bounds: na::Vector4::<f32>::zeros(),
+                upper_bounds: na::Vector4::<f32>::zeros(),
                 primitive_offset: primitives.len() as u32,
-                primitive_count: mesh.primitives.len() as u32,
-                _padding: [0; 2]
+                primitive_count: mesh.primitives.len() as u32
             });
             for primitive in &mesh.primitives {
                 primitives.push(DevicePrimitive {
-                    material: primitive.material,
-                    _padding: [0; 3]
+                    material: primitive.material
                 });
                 primitive_commands.push(*vk::DrawIndexedIndirectCommand::builder()
                     .index_count(primitive.indices.len() as u32)
@@ -101,8 +104,7 @@ impl DeviceScene {
                         transform: transform.to_homogeneous(),
                         inverse_transform: transform.inverse().to_homogeneous(),
                         mesh,
-                        flags: 0,
-                        _padding: [0, 0]
+                        flags: 0
                     })
                 } else {None}
             }).collect();
@@ -120,65 +122,58 @@ impl DeviceScene {
                 draw_commands_extra.push([i as u32, j as u32]);
             }
         }
-        let draw_commands: Vec<_> = draw_commands.iter().cycle()
-            .take(FRAME_COUNT * draw_commands.len()).copied().collect();
-        let draw_commands_extra: Vec<_> = draw_commands_extra.iter().cycle()
-            .take(FRAME_COUNT * draw_commands_extra.len()).copied().collect();
-        debug_assert!(draw_commands.len() == draw_commands_extra.len());
         //Create device-local buffers
+        let buffer_sizes = [
+            vertices.len() * std::mem::size_of::<Vertex>(),
+            indices.len() * std::mem::size_of::<u16>(),
+            primitives.len() * std::mem::size_of::<DevicePrimitive>(),
+            meshes.len() * std::mem::size_of::<DeviceMesh>(),
+            scene.materials.len() * std::mem::size_of::<Material>(),
+            primitive_commands.len() * std::mem::size_of::<vk::DrawIndexedIndirectCommand>(),
+            nodes.len() * std::mem::size_of::<DeviceNode>(),
+            draw_commands.len() * std::mem::size_of::<vk::DrawIndexedIndirectCommand>(),
+            draw_commands_extra.len() * std::mem::size_of::<[u32; 2]>(),
+            std::mem::size_of::<u32>()
+        ];
         let create_infos = [
             //Vertex buffer
             *vk::BufferCreateInfo::builder()
-                .size((vertices.len() * std::mem::size_of::<Vertex>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::VERTEX_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[0] as u64)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Index buffer
             *vk::BufferCreateInfo::builder()
-                .size((indices.len() * std::mem::size_of::<u16>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::INDEX_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[1] as u64)
+                .usage(vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Primitives
             *vk::BufferCreateInfo::builder()
-                .size((primitives.len() * std::mem::size_of::<DevicePrimitive>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[2] as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Meshes
             *vk::BufferCreateInfo::builder()
-                .size((meshes.len() * std::mem::size_of::<DeviceMesh>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[3] as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Materials
             *vk::BufferCreateInfo::builder()
-                .size((scene.materials.len() * std::mem::size_of::<Material>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[4] as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Primitive draw commands
             *vk::BufferCreateInfo::builder()
-                .size((primitive_commands.len() * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size(buffer_sizes[5] as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Nodes
             *vk::BufferCreateInfo::builder()
-                .size((FRAME_COUNT * nodes.len() * std::mem::size_of::<DeviceNode>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE),
+                .size((FRAME_COUNT * buffer_sizes[6]) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Draw commands
             *vk::BufferCreateInfo::builder()
-                .size((FRAME_COUNT * draw_commands.len() * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64)
+                .size((FRAME_COUNT * buffer_sizes[7]) as u64)
                 .usage(
                     vk::BufferUsageFlags::INDIRECT_BUFFER
                     | vk::BufferUsageFlags::STORAGE_BUFFER
@@ -186,16 +181,25 @@ impl DeviceScene {
                 ).sharing_mode(vk::SharingMode::EXCLUSIVE),
             //Draw command extra
             *vk::BufferCreateInfo::builder()
-                .size((FRAME_COUNT * draw_commands_extra.len() * std::mem::size_of::<[u32; 2]>()) as u64)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                   | vk::BufferUsageFlags::TRANSFER_DST
-                ).sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .size((FRAME_COUNT * buffer_sizes[8]) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
+            //Draw count
+            *vk::BufferCreateInfo::builder()
+                .size((FRAME_COUNT * buffer_sizes[9]) as u64)
+                .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
         ];
         let (buffers, buffer_alloc) = base.create_buffers(
             &create_infos,
             vk::MemoryPropertyFlags::DEVICE_LOCAL
         )?;
+        //Duplication
+        let draw_commands: Vec<_> = draw_commands.iter().cycle()
+            .take(FRAME_COUNT * draw_commands.len()).copied().collect();
+        let draw_commands_extra: Vec<_> = draw_commands_extra.iter().cycle()
+            .take(FRAME_COUNT * draw_commands_extra.len()).copied().collect();
+        debug_assert!(draw_commands.len() == draw_commands_extra.len());
         //Write to buffers
         transaction.buffer_write(&vertices, buffers[0], 0);
         transaction.buffer_write(&indices, buffers[1], 0);
@@ -206,6 +210,50 @@ impl DeviceScene {
         transaction.buffer_write(&nodes, buffers[6], 0);
         transaction.buffer_write(&draw_commands, buffers[7], 0);
         transaction.buffer_write(&draw_commands_extra, buffers[8], 0);
+
+        //Buffer descriptors
+        //Static descriptors
+        let mut buffer_descriptors = vec![
+            //Primitives
+            *vk::DescriptorBufferInfo::builder()
+                .buffer(buffers[2])
+                .offset(0)
+                .range(vk::WHOLE_SIZE),
+            //Meshes
+            *vk::DescriptorBufferInfo::builder()
+                .buffer(buffers[3])
+                .offset(0)
+                .range(vk::WHOLE_SIZE),
+            //Materials
+            *vk::DescriptorBufferInfo::builder()
+                .buffer(buffers[4])
+                .offset(0)
+                .range(vk::WHOLE_SIZE),
+            //Primitive draw commands
+            *vk::DescriptorBufferInfo::builder()
+                .buffer(buffers[5])
+                .offset(0)
+                .range(vk::WHOLE_SIZE),
+        ];
+        //Dynamic descriptors
+        let framed_buffer_descriptor = |i: usize, frame: usize| -> vk::DescriptorBufferInfo {
+            debug_assert!(frame < FRAME_COUNT);
+            let size = buffer_sizes[i];
+            *vk::DescriptorBufferInfo::builder()
+                .buffer(buffers[i])
+                .offset((frame * size) as u64)
+                .range(size as u64)
+        };
+        buffer_descriptors.extend((0..FRAME_COUNT).map(
+            |frame| framed_buffer_descriptor(6, frame)
+        )); //Nodes
+        buffer_descriptors.extend((0..FRAME_COUNT).map(
+            |frame| framed_buffer_descriptor(8, frame)
+        )); //Draw command extras
+        buffer_descriptors.extend((0..FRAME_COUNT).map(
+            |frame| framed_buffer_descriptor(9, frame)
+        )); //Draw command count
+
         //Textures
         let format = vk::Format::R8G8B8A8_SRGB;
         //Create images
@@ -283,15 +331,32 @@ impl DeviceScene {
                 base.device.create_image_view(&create_info, None).unwrap()
             }
         }).collect();
+
+        //Image descriptors
+        let mut image_descriptors = [
+            *vk::DescriptorImageInfo::builder()
+                .image_view(image_views[0])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            MAX_TEXTURES
+        ];
+        for i in 0..image_views.len() {
+            image_descriptors[i] = *vk::DescriptorImageInfo::builder()
+                .image_view(image_views[i])
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        }
+
         //Result
         Ok(Self {
             base,
             nodes,
             buffers: buffers.try_into().unwrap(),
             buffer_alloc,
+            buffer_sizes,
+            buffer_descriptors: buffer_descriptors.try_into().unwrap(),
             images,
             image_views,
-            image_alloc
+            image_alloc,
+            image_descriptors
         })
     }
 
@@ -303,8 +368,7 @@ impl DeviceScene {
                         transform: transform.to_homogeneous(),
                         inverse_transform: transform.inverse().to_homogeneous(),
                         mesh,
-                        flags: 0,
-                        _padding: [0, 0]
+                        flags: 0
                     })
                 } else {None}
             }).collect();

@@ -11,6 +11,6 @@ Realtime 3D graphics renderer.
 * [ ] Shadow mapping
 * [x] Skybox
 ### Acceleration
-* [ ] Frustum culling
+* [x] Frustum culling
 * [ ] Occlusion culling
 * [ ] Clustered forward rendering

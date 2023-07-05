@@ -34,7 +34,7 @@ struct DrawCommand {
 layout(std140, set=0, binding=3) restrict readonly buffer primitive_storage {
 	DrawCommand primitives[];
 };
-layout(std140, set=0, binding=4) volatile restrict buffer draw_count_storage {
+layout(std140, set=0, binding=4) restrict buffer draw_count_storage {
 	uint draw_count;
 };
 layout(std140, set=0, binding=5) restrict writeonly buffer draw_command_storage {
@@ -63,12 +63,10 @@ bool frustum_culling(Node node, Mesh mesh) {
 	};
 	//Transform corners into frustum space
 	for (uint i = 0; i < 8; ++i) {
-		const vec4 corner = corners[i];
-		corners[i] = projection * view * node.transform * corner;
+		corners[i] = projection * view * node.transform * corners[i];
+		corners[i] /= corners[i].w;
 	}
 	//Check frustum planes
-	bool visible = true;
-	//{-x, -y, -z, +x, +y, +z}
 	bool excluded[6] = {true, true, true, true, true, true};
 	for (uint i = 0; i < 8; ++i) {
 		const vec4 corner = corners[i];
@@ -79,7 +77,9 @@ bool frustum_culling(Node node, Mesh mesh) {
 		excluded[4] = excluded[4] && corner.y > 1;
 		excluded[5] = excluded[5] && corner.z > 1;
 	}
-	for (uint i = 0; i < 6; ++i) visible = visible && !excluded[i];
+	bool visible = true;
+	for (uint i = 0; i < 6; ++i)
+		visible = visible && !excluded[i];
 	return visible;
 }
 

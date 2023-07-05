@@ -106,17 +106,16 @@ impl SceneSet {
         }
         //Create pool
         let pbr_set_count = FRAME_COUNT * self.scenes.len();
-        //let cull_set_count = FRAME_COUNT * self.scenes.len();
+        let cull_set_count = FRAME_COUNT * self.scenes.len();
         let env_set_count = FRAME_COUNT;
         //TODO: Automatic pool size counting
-        //FIXME: Recount pool size
         let pool_sizes = [
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count((pbr_set_count + env_set_count) as u32),
+                .descriptor_count((pbr_set_count + cull_set_count + env_set_count) as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(5 * pbr_set_count as u32),
+                .descriptor_count((5 * pbr_set_count + 6 * cull_set_count) as u32),
             *vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::SAMPLER)
                 .descriptor_count(pbr_set_count as u32),
@@ -128,7 +127,7 @@ impl SceneSet {
                 .descriptor_count(3 * pbr_set_count as u32 + env_set_count as u32)
         ];
         let create_info = vk::DescriptorPoolCreateInfo::builder()
-            .max_sets((pbr_set_count + env_set_count) as u32)
+            .max_sets((pbr_set_count + cull_set_count + env_set_count) as u32)
             .pool_sizes(&pool_sizes);
         self.descriptor_pool = unsafe {
             self.base.device.create_descriptor_pool(&create_info, None)
@@ -136,7 +135,7 @@ impl SceneSet {
         //Allocate descriptor sets
         let layouts: Vec<vk::DescriptorSetLayout> = [
             std::iter::repeat(renderer.layouts[0].descriptor_set_layout).take(pbr_set_count),
-            //std::iter::repeat(renderer.layouts[2].descriptor_set_layout).take(cull_set_count),
+            std::iter::repeat(renderer.cull_layout.descriptor_set_layout).take(cull_set_count),
             std::iter::repeat(renderer.layouts[1].descriptor_set_layout).take(env_set_count)
         ].into_iter().flatten().collect();
         let allocate_info = vk::DescriptorSetAllocateInfo::builder()
@@ -234,11 +233,84 @@ impl SceneSet {
             }
         }
 
+        //Compute culling pipeline
+        for (i, scene) in self.scenes.iter().enumerate() {
+            //Per-frame descriptor writes
+            for frame in 0..FRAME_COUNT {
+                let descriptor_set = self.descriptor_sets[pbr_set_count + FRAME_COUNT * i + frame];
+                writes.extend_from_slice(&[
+                    //Uniforms
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(0)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &self.buffer_descriptors[FRAME_COUNT + frame]
+                        )),
+                    //Nodes
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(1)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[4 + frame]
+                        )),
+                    //Meshes
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(2)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[1]
+                        )),
+                    //Primitives
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(3)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[3]
+                        )),
+                    //Draw count
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(4)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[4 + 2 * FRAME_COUNT + frame]
+                        )),
+                    //Draw commands
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(5)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[4 + 3 * FRAME_COUNT + frame]
+                        )),
+                    //Extras
+                    *vk::WriteDescriptorSet::builder()
+                        .dst_set(descriptor_set)
+                        .dst_binding(6)
+                        .dst_array_element(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(
+                            &scene.buffer_descriptors[4 + FRAME_COUNT + frame]
+                        ))
+                ])
+            }
+        }
+
         //Skybox pipeline
         //Camera
         writes.extend((0..FRAME_COUNT).map(
             |frame| *vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[pbr_set_count + frame])
+                .dst_set(self.descriptor_sets[pbr_set_count + cull_set_count + frame])
                 .dst_binding(0)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -249,7 +321,7 @@ impl SceneSet {
         //Skybox image
         writes.extend((0..FRAME_COUNT).map(
             |frame| *vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[pbr_set_count + frame])
+                .dst_set(self.descriptor_sets[pbr_set_count + cull_set_count + frame])
                 .dst_binding(1)
                 .dst_array_element(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -284,9 +356,15 @@ impl SceneSet {
         self.descriptor_sets[scene * FRAME_COUNT + frame]
     }
 
+    pub fn cull_descriptors(&self, scene: usize, frame: usize) -> vk::DescriptorSet {
+        assert!(scene < self.scenes.len());
+        assert!(frame < FRAME_COUNT);
+        self.descriptor_sets[(self.scenes.len() + scene) * FRAME_COUNT + frame]
+    }
+
     pub fn skybox_descriptors(&self, frame: usize) -> vk::DescriptorSet {
         assert!(frame < FRAME_COUNT);
-        self.descriptor_sets[self.scenes.len() * FRAME_COUNT + frame]
+        self.descriptor_sets[2 * self.scenes.len() * FRAME_COUNT + frame]
     }
 }
 

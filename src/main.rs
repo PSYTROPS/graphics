@@ -27,8 +27,8 @@ fn main() {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.push("assets");
-    //path.push("Cube.gltf");
-    path.push("MetalRoughSpheres.glb");
+    path.push("Cube.gltf");
+    //path.push("MetalRoughSpheres.glb");
     //path.push("DamagedHelmet.glb");
     //path.push("SciFiHelmet.gltf");
     //path.push("bottle.glb");

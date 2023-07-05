@@ -84,7 +84,7 @@ fn create_pipeline(
         base.device.create_shader_module(&create_info, None)?
     };
     let shader_stage = *vk::PipelineShaderStageCreateInfo::builder()
-        .stage(vk::ShaderStageFlags::VERTEX)
+        .stage(vk::ShaderStageFlags::COMPUTE)
         .module(shader)
         .name(unsafe {std::ffi::CStr::from_bytes_with_nul_unchecked(b"main\0")});
     let create_info = vk::ComputePipelineCreateInfo::builder()

@@ -30,6 +30,7 @@ pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 pub const SAMPLE_COUNT: vk::SampleCountFlags = vk::SampleCountFlags::TYPE_4;
 pub const MAX_TEXTURES: usize = 64;
 pub const MAX_LIGHTS: usize = 64;
+pub const TIMEOUT: u64 = 1_000_000_000;
 
 pub struct Renderer {
     pub base: Rc<Base>,
@@ -47,6 +48,9 @@ pub struct Renderer {
     dfg_lookup_sampler: vk::Sampler,
     dfg_lookup_alloc: vk::DeviceMemory,
     dfg_descriptor: vk::DescriptorImageInfo,
+    //Compute
+    cull_layout: PipelineLayout,
+    cull_pipeline: vk::Pipeline,
     current_frame: usize
 }
 
@@ -64,11 +68,17 @@ impl<'a> Renderer {
         };
         let layouts = [
             pipeline::mesh::create_layout(base.clone())?,
-            pipeline::skybox::create_layout(base.clone())?,
-            //pipeline::cull::create_layout(base.clone())?
+            pipeline::skybox::create_layout(base.clone())?
         ];
         let framebuffer = Framebuffer::new(base.clone(), extent, &layouts)?;
         let swapchain = Swapchain::new(base.clone(), None)?;
+        //Compute culling
+        let cull_layout = pipeline::cull::create_layout(base.clone())?;
+        let cull_pipeline = (cull_layout.create_pipeline)(
+            &cull_layout,
+            vk::Extent2D::default(),
+            vk::RenderPass::default()
+        )?;
         //Skybox mesh
         let skybox_vertices: [f32; 3 * 14] = [
             1.0, -1.0, -1.0,
@@ -186,6 +196,8 @@ impl<'a> Renderer {
             dfg_lookup_sampler,
             dfg_lookup_alloc: lut_allocation,
             dfg_descriptor,
+            cull_layout,
+            cull_pipeline,
             current_frame: 0
         })
     }
@@ -210,7 +222,7 @@ impl<'a> Renderer {
             while swapchain_suboptimal {
                 (swapchain_index, swapchain_suboptimal) = self.swapchain.loader.acquire_next_image(
                     self.swapchain.swapchain,
-                    100_000_000, //100 milliseconds
+                    TIMEOUT,
                     frame.semaphores[0],
                     vk::Fence::null()
                 )?;
@@ -228,7 +240,7 @@ impl<'a> Renderer {
             self.base.device.wait_for_fences(
                 std::slice::from_ref(&frame.fence),
                 false,
-                100_000_000, //100 milliseconds
+                TIMEOUT
             )?;
             self.base.device.reset_fences(std::slice::from_ref(&frame.fence))?;
             //Transactions
@@ -257,6 +269,12 @@ impl<'a> Renderer {
                     scene.buffers[6],
                     self.current_frame * nodes_size
                 );
+                //Draw count
+                transaction.buffer_write(
+                    std::slice::from_ref(&0),
+                    scene.buffers[9],
+                    self.current_frame * std::mem::size_of::<u32>()
+                );
             }
             //Transfer operations
             let (transfer_semaphore, transfer_semaphore_value) = self.transfer.submit(
@@ -267,12 +285,52 @@ impl<'a> Renderer {
             let begin_info = vk::CommandBufferBeginInfo::builder()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.base.device.begin_command_buffer(frame.command_buffer, &begin_info)?;
+            //Pipeline barrier
+            let memory_barrier = vk::MemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_WRITE);
+            let dependency = vk::DependencyInfo::builder()
+                .memory_barriers(std::slice::from_ref(&memory_barrier));
+            self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             //Transfer barriers
             if transaction.end_image_barriers.len() > 0 {
                 let dependency = vk::DependencyInfo::builder()
                     .image_memory_barriers(&transaction.end_image_barriers);
                 self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             }
+            //Compute culling
+            self.base.device.cmd_bind_pipeline(
+                frame.command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.cull_pipeline
+            );
+            for (i, scene) in scene_set.scenes.iter().enumerate() {
+                self.base.device.cmd_bind_descriptor_sets(
+                    frame.command_buffer,
+                    vk::PipelineBindPoint::COMPUTE,
+                    self.cull_layout.pipeline_layout,
+                    0,
+                    std::slice::from_ref(&scene_set.cull_descriptors(i, self.current_frame)),
+                    &[]
+                );
+                self.base.device.cmd_dispatch(
+                    frame.command_buffer,
+                    scene.nodes.len() as u32,
+                    1,
+                    1
+                );
+            }
+            //Pipeline barrier
+            let memory_barrier = vk::MemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ);
+            let dependency = vk::DependencyInfo::builder()
+                .memory_barriers(std::slice::from_ref(&memory_barrier));
+            self.base.device.cmd_pipeline_barrier2(frame.command_buffer, &dependency);
             //Drawing
             let render_area = vk::Rect2D::builder()
                 .offset(vk::Offset2D::default())
@@ -320,10 +378,21 @@ impl<'a> Renderer {
                     std::slice::from_ref(&scene_set.scene_descriptors(i, self.current_frame)),
                     &[]
                 );
+                /*
                 self.base.device.cmd_draw_indexed_indirect(
                     frame.command_buffer,
                     scene.buffers[7],
                     0,
+                    scene.nodes.len() as u32,
+                    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
+                );
+                */
+                self.base.device.cmd_draw_indexed_indirect_count(
+                    frame.command_buffer,
+                    scene.buffers[7],
+                    0,
+                    scene.buffers[9],
+                    (self.current_frame * std::mem::size_of::<u32>()) as u64,
                     scene.nodes.len() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
                 );
@@ -473,6 +542,7 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
             self.base.device.device_wait_idle().unwrap();
+            self.base.device.destroy_pipeline(self.cull_pipeline, None);
             self.base.device.destroy_buffer(self.skybox_vertex_buffer, None);
             self.base.device.free_memory(self.skybox_vertex_alloc, None);
             self.base.device.destroy_sampler(self.dfg_lookup_sampler, None);

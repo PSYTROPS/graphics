@@ -12,37 +12,37 @@ pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Nodes
+        //Meshes
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Meshes
+        //Mesh draw commands
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Primitives
+        //Nodes
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Draw count
+        //Draw commands
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Draw commands
+        //Extras
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(5)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        //Extras
+        //Draw count
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(6)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -55,8 +55,12 @@ pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
         base.device.create_descriptor_set_layout(&create_info, None)?
     };
     //Pipeline layout
+    let push_constant = vk::PushConstantRange::builder()
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .size(std::mem::size_of::<u32>() as u32);
     let create_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(std::slice::from_ref(&descriptor_set_layout));
+        .set_layouts(std::slice::from_ref(&descriptor_set_layout))
+        .push_constant_ranges(std::slice::from_ref(&push_constant));
     let pipeline_layout = unsafe {
         base.device.create_pipeline_layout(&create_info, None)?
     };

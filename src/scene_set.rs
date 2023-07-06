@@ -163,7 +163,7 @@ impl SceneSet {
                         .buffer_info(std::slice::from_ref(
                             &self.buffer_descriptors[FRAME_COUNT + frame]
                         )),
-                    //Primitives
+                    //Meshes
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(1)
@@ -172,32 +172,32 @@ impl SceneSet {
                         .buffer_info(std::slice::from_ref(
                             &scene.buffer_descriptors[0]
                         )),
-                    //Nodes
+                    //Materials
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(2)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + frame]
+                            &scene.buffer_descriptors[1]
                         )),
-                    //Draw command extras
+                    //Nodes
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(3)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + FRAME_COUNT + frame]
+                            &scene.buffer_descriptors[3 + frame]
                         )),
-                    //Materials
+                    //Draw command extras
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(4)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[2]
+                            &scene.buffer_descriptors[3 + 2 * FRAME_COUNT + frame]
                         )),
                     //Textures
                     *vk::WriteDescriptorSet::builder()
@@ -248,59 +248,59 @@ impl SceneSet {
                         .buffer_info(std::slice::from_ref(
                             &self.buffer_descriptors[FRAME_COUNT + frame]
                         )),
-                    //Nodes
+                    //Meshes
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(1)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + frame]
+                            &scene.buffer_descriptors[0]
                         )),
-                    //Meshes
+                    //Mesh draw commands
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(2)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[1]
+                            &scene.buffer_descriptors[2]
                         )),
-                    //Primitives
+                    //Nodes
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(3)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[3]
+                            &scene.buffer_descriptors[3 + frame]
                         )),
-                    //Draw count
+                    //Draw commands
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(4)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + 2 * FRAME_COUNT + frame]
+                            &scene.buffer_descriptors[3 + FRAME_COUNT + frame]
                         )),
-                    //Draw commands
+                    //Draw command extras
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(5)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + 3 * FRAME_COUNT + frame]
+                            &scene.buffer_descriptors[3 + 2 * FRAME_COUNT + frame]
                         )),
-                    //Extras
+                    //Draw count
                     *vk::WriteDescriptorSet::builder()
                         .dst_set(descriptor_set)
                         .dst_binding(6)
                         .dst_array_element(0)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(
-                            &scene.buffer_descriptors[4 + FRAME_COUNT + frame]
+                            &scene.buffer_descriptors[3 + 3 * FRAME_COUNT + frame]
                         ))
                 ])
             }

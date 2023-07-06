@@ -23,7 +23,7 @@ struct Material {
 	float metal;
 	float rough;
 };
-layout(std430, set=0, binding=4) restrict readonly buffer material_buffer {
+layout(std430, set=0, binding=2) restrict readonly buffer material_buffer {
 	Material materials[];
 };
 layout(set=0, binding=5) uniform sampler s;

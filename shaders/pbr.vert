@@ -17,11 +17,13 @@ layout(set=0, binding=0) uniform camera {
 	mat4 projection;
 	vec4 camera_pos;
 };
-struct Primitive {
+struct Mesh {
+	vec4 lower_bounds;
+	vec4 upper_bounds;
 	uint material;
 };
-layout(std430, set=0, binding=1) restrict readonly buffer primitive_storage {
-	Primitive primitives[];
+layout(std430, set=0, binding=1) restrict readonly buffer mesh_storage {
+	Mesh meshes[];
 };
 struct Node {
 	mat4 transform;
@@ -29,14 +31,14 @@ struct Node {
 	uint mesh;
 	uint flags;
 };
-layout(std430, set=0, binding=2) restrict readonly buffer node_storage {
+layout(std430, set=0, binding=3) restrict readonly buffer node_storage {
 	Node nodes[];
 };
 struct Extra {
 	uint node;
-	uint primitive;
+	uint mesh;
 };
-layout(std430, set=0, binding=3) restrict readonly buffer extra_storage {
+layout(std430, set=0, binding=4) restrict readonly buffer extra_storage {
 	Extra extras[];
 };
 
@@ -44,7 +46,7 @@ void main() {
 	//Inputs
 	const Extra extra = extras[gl_DrawID];
 	const Node node = nodes[extra.node];
-	const Primitive primitive = primitives[extra.primitive];
+	const Mesh mesh = meshes[extra.mesh];
 	//Position
 	const vec4 pos = vec4(in_pos, 1.0); //Model-space position
 	const vec4 world_pos = node.transform * pos;
@@ -53,5 +55,5 @@ void main() {
 	out_pos = vec3(world_pos);
 	out_normal = normalize(vec3(transpose(node.inverse_transform) * vec4(in_normal, 0.0)));
 	out_texcoords = in_texcoords;
-	out_material = primitive.material;
+	out_material = mesh.material;
 }

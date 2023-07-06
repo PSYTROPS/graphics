@@ -26,30 +26,30 @@ pub fn create_layout(base: Rc<Base>) -> Result<PipelineLayout, vk::Result> {
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        //Primitives
+        //Meshes
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Nodes
+        //Materials
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Draw command extras
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        //Nodes
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::VERTEX),
-        //Materials
+        //Draw command extras
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::VERTEX),
         //Sampler
         *vk::DescriptorSetLayoutBinding::builder()
             .binding(5)

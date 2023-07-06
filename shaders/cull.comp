@@ -1,28 +1,22 @@
 #version 460
+layout(local_size_x = 64) in;
 
-//Descriptors
-layout(set=0, binding=0) uniform camera {
-	mat4 view;
-	mat4 projection;
-	vec4 camera_pos;
+//Push constants
+layout(push_constant) uniform constants {
+	uint node_count;
+};
+
+//Structures
+struct Mesh {
+	vec4 lower_corner;
+	vec4 upper_corner;
+	uint material;
 };
 struct Node {
 	mat4 transform;
 	mat4 inverse_transform;
 	uint mesh;
 	uint flags;
-};
-layout(std430, set=0, binding=1) restrict readonly buffer node_storage {
-	Node nodes[];
-};
-struct Mesh {
-	vec4 lower_corner;
-	vec4 upper_corner;
-	uint primitive_offset;
-	uint primitive_count;
-};
-layout(std140, set=0, binding=2) restrict readonly buffer mesh_storage {
-	Mesh meshes[];
 };
 struct DrawCommand {
 	uint index_count;
@@ -31,21 +25,34 @@ struct DrawCommand {
 	int vertex_offset;
 	uint first_instance;
 };
-layout(std140, set=0, binding=3) restrict readonly buffer primitive_storage {
-	DrawCommand primitives[];
-};
-layout(std140, set=0, binding=4) restrict buffer draw_count_storage {
-	uint draw_count;
-};
-layout(std140, set=0, binding=5) restrict writeonly buffer draw_command_storage {
-	DrawCommand draw_commands[];
-};
 struct Extra {
 	uint node;
 	uint primitive;
 };
-layout(std430, set=0, binding=6) restrict writeonly buffer extra_storage {
+
+//Descriptors
+layout(set=0, binding=0) uniform camera {
+	mat4 view;
+	mat4 projection;
+	vec4 camera_pos;
+};
+layout(std430, set=0, binding=1) restrict readonly buffer mesh_storage {
+	Mesh meshes[];
+};
+layout(std430, set=0, binding=2) restrict readonly buffer mesh_command_storage {
+	DrawCommand mesh_commands[];
+};
+layout(std430, set=0, binding=3) restrict readonly buffer node_storage {
+	Node nodes[];
+};
+layout(std430, set=0, binding=4) restrict writeonly buffer draw_command_storage {
+	DrawCommand draw_commands[];
+};
+layout(std430, set=0, binding=5) restrict writeonly buffer extra_storage {
 	Extra extras[];
+};
+layout(std430, set=0, binding=6) restrict buffer draw_count_storage {
+	uint draw_count;
 };
 
 bool frustum_culling(Node node, Mesh mesh) {
@@ -84,15 +91,16 @@ bool frustum_culling(Node node, Mesh mesh) {
 }
 
 void main() {
-	const Node node = nodes[gl_GlobalInvocationID.x];
-	const Mesh mesh = meshes[node.mesh];
-	bool visible = bool(node.flags & 1);
-	visible = visible && frustum_culling(node, mesh);
-	if (visible) {
-		const uint command_offset = atomicAdd(draw_count, mesh.primitive_count);
-		for (uint i = 0; i < mesh.primitive_count; ++i) {
-			draw_commands[command_offset + i] = primitives[mesh.primitive_offset + i];
-			extras[command_offset + i] = Extra(gl_GlobalInvocationID.x, node.mesh);
+	const uint id = gl_GlobalInvocationID.x;
+	if (id < node_count) {
+		const Node node = nodes[id];
+		const Mesh mesh = meshes[node.mesh];
+		bool visible = bool(node.flags & 1);
+		visible = visible && frustum_culling(node, mesh);
+		if (visible) {
+			const uint count = atomicAdd(draw_count, 1);
+			draw_commands[count] = mesh_commands[node.mesh];
+			extras[count] = Extra(id, node.mesh);
 		}
 	}
 }

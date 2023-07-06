@@ -7,7 +7,6 @@ use transfer::Transfer;
 use transfer::transaction::Transaction;
 use pipeline::PipelineLayout;
 use scene_set::SceneSet;
-use device_scene::DeviceNode;
 use scene::PointLight;
 
 use std::rc::Rc;
@@ -263,17 +262,16 @@ impl<'a> Renderer {
             //Update scene dynamic data
             for scene in &scene_set.scenes {
                 //Nodes
-                let nodes_size = scene.nodes.len() * std::mem::size_of::<DeviceNode>();
                 transaction.buffer_write(
                     &scene.nodes,
-                    scene.buffers[6],
-                    self.current_frame * nodes_size
+                    scene.buffers[5],
+                    self.current_frame * scene.buffer_sizes[5]
                 );
                 //Draw count
-                transaction.buffer_write(
+                transaction.buffer_write::<u32>(
                     std::slice::from_ref(&0),
-                    scene.buffers[9],
-                    self.current_frame * std::mem::size_of::<u32>()
+                    scene.buffers[8],
+                    self.current_frame * scene.buffer_sizes[8]
                 );
             }
             //Transfer operations
@@ -307,6 +305,13 @@ impl<'a> Renderer {
                 self.cull_pipeline
             );
             for (i, scene) in scene_set.scenes.iter().enumerate() {
+                self.base.device.cmd_push_constants(
+                    frame.command_buffer,
+                    self.cull_layout.pipeline_layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    &(scene.nodes.len() as u32).to_le_bytes()
+                );
                 self.base.device.cmd_bind_descriptor_sets(
                     frame.command_buffer,
                     vk::PipelineBindPoint::COMPUTE,
@@ -317,7 +322,7 @@ impl<'a> Renderer {
                 );
                 self.base.device.cmd_dispatch(
                     frame.command_buffer,
-                    scene.nodes.len() as u32,
+                    ((scene.nodes.len() + 63) / 64) as u32,
                     1,
                     1
                 );
@@ -381,7 +386,7 @@ impl<'a> Renderer {
                 /*
                 self.base.device.cmd_draw_indexed_indirect(
                     frame.command_buffer,
-                    scene.buffers[7],
+                    scene.buffers[6],
                     0,
                     scene.nodes.len() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
@@ -389,10 +394,10 @@ impl<'a> Renderer {
                 */
                 self.base.device.cmd_draw_indexed_indirect_count(
                     frame.command_buffer,
-                    scene.buffers[7],
-                    0,
-                    scene.buffers[9],
-                    (self.current_frame * std::mem::size_of::<u32>()) as u64,
+                    scene.buffers[6],
+                    (self.current_frame * scene.buffer_sizes[6]) as u64,
+                    scene.buffers[8],
+                    (self.current_frame * scene.buffer_sizes[8]) as u64,
                     scene.nodes.len() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32
                 );
